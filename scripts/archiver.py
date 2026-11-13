@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-WorkBuddy 对话项目归档器 (dev-project-archivist)
+对话项目归档器 (dev-project-archivist)
 
-职责：扫描本机 WorkBuddy 对话历史，识别其中开发的项目，把「日期 / 用途 / 源代码 /
+职责：扫描本机 AI 对话历史，识别其中开发的项目，把「日期 / 用途 / 源代码 /
 技术实现 / 会话索引」整理到用户指定目录，并支持增量同步。
+
+架构：
+  adapters/<平台>.py  把各平台的会话数据翻译成统一的中立事件流
+  archiver.py         归并、判定、抽取、归档、渲染（与平台无关）
+  新增平台只需在 adapters/ 下加一个文件，主程序不改。
 
 设计原则：
   1. 确定性解析承担 99% 的工作，大模型只做语言归纳（避免 735MB 转录进上下文）。
@@ -14,12 +19,9 @@ WorkBuddy 对话项目归档器 (dev-project-archivist)
   4. 幂等：README 划出 AUTO 区，用户手写区永不被覆盖；重跑不产生重复内容。
   5. 可回退：删除走 .trash/，归档目录内的文件永不原地销毁。
 
-数据源（均只读）：
+数据源（由适配器决定，均只读）。内置 WorkBuddy 适配器读取：
   ~/.workbuddy/workbuddy.db                       会话元数据 (sessions 表)
   ~/.workbuddy/projects/<cwd编码>/<sid>.jsonl     对话转录
-  ~/.workbuddy/artifact-index/<sid>.json          产物索引
-  ~/.workbuddy/file-history/<sid>/<hash>@vN       文件版本快照
-  ~/WorkBuddy/<workspace>/                        工作区实体文件
   <workspace>/.workbuddy/memory/*.md              项目记忆
 
 用法：
@@ -36,11 +38,18 @@ import json
 import os
 import re
 import shutil
-import sqlite3
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+
+# 适配器包与主程序同目录；脚本直跑时 sys.path[0] 已是本目录，
+# 但从其他位置 import 时需显式补一次，保证两种方式都能加载。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from adapters import get_adapter  # noqa: E402
+from adapters.base import (EV_ASSISTANT, EV_PROMPT,  # noqa: E402
+                           EV_TITLE, EV_TOOL, EV_TOOL_RESULT, EV_TS, EV_WRITE)
 
 # ---------------------------------------------------------------- 控制台编码
 try:
@@ -51,11 +60,9 @@ except Exception:
 
 # ---------------------------------------------------------------- 路径常量
 HOME = Path.home()
-WB_HOME = HOME / ".workbuddy"
-PROJECTS_DIR = WB_HOME / "projects"
-SESSION_DB = WB_HOME / "workbuddy.db"
-ARTIFACT_INDEX = WB_HOME / "artifact-index"
-FILE_HISTORY = WB_HOME / "file-history"
+
+# 各平台的会话数据源路径已随适配器迁至 adapters/<平台>.py。
+# 此处只保留判定「AI 从零创建的工作区」所需的根目录，供 Project.compute 使用。
 WORKSPACES_ROOT = HOME / "WorkBuddy"
 
 # 默认输出目录：优先读环境变量 ARCHIVER_TARGET，未设置则落在用户主目录下。
@@ -227,7 +234,6 @@ DECISION_KW = re.compile(
     r"(方案|决定|结论|选型|权衡|根因|修复|踩坑|改为|改用|采用|定案|不建议|建议先|"
     r"原因在于|导致|回退|降级|替代|最终选择|取舍)"
 )
-ERROR_HINT = re.compile(r"(错误|失败|异常|不通过|报错|Error|error:|Exception|CS\d{4}|fail)", re.I)
 SECRET_TOKEN_PAT = re.compile(r"sk-[A-Za-z0-9_\-]{12,}|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}")
 SECRET_KV_PAT = re.compile(
     r"(?:api[_-]?key|access[_-]?token|password|passwd|secret)\s*[:=]\s*[\"']?[^\s\"',;}]{6,}",
@@ -510,62 +516,6 @@ def log(msg: str, verbose: bool = True):
         print(msg, flush=True)
 
 
-# ================================================================ 会话采集
-class SessionIndex:
-    """构建 session_id → (元数据, 转录路径) 的统一索引"""
-
-    def __init__(self):
-        self.meta = {}   # sid -> dict(cwd,title,created,updated,model,playground,automation)
-        self.jsonl = {}  # sid -> Path
-
-    def load(self):
-        self._load_db()
-        self._load_jsonl_dirs()
-        return self
-
-    def _load_db(self):
-        if not SESSION_DB.exists():
-            return
-        try:
-            con = sqlite3.connect(f"file:{SESSION_DB.as_posix()}?mode=ro", uri=True, timeout=3)
-            con.row_factory = sqlite3.Row
-            rows = con.execute(
-                "SELECT id, cwd, title, custom_title, created_at, updated_at, "
-                "model, is_playground, is_background_automation, deleted_at "
-                "FROM sessions"
-            ).fetchall()
-            for r in rows:
-                if r["deleted_at"]:
-                    continue
-                self.meta[r["id"]] = {
-                    "cwd": r["cwd"] or "",
-                    "title": (r["custom_title"] or r["title"] or "").strip(),
-                    "created": r["created_at"],
-                    "updated": r["updated_at"] or r["created_at"],
-                    "model": r["model"] or "",
-                    "playground": bool(r["is_playground"]),
-                    "automation": bool(r["is_background_automation"]),
-                }
-            con.close()
-        except Exception as e:
-            log(f"[warn] 读取会话数据库失败，降级为文件扫描：{e}")
-
-    def _load_jsonl_dirs(self):
-        if not PROJECTS_DIR.exists():
-            return
-        for p in PROJECTS_DIR.glob("*/*.jsonl"):
-            self.jsonl[p.stem] = p
-
-    def ids(self):
-        return set(self.meta) | set(self.jsonl)
-
-    def transcript(self, sid) -> Path:
-        return self.jsonl.get(sid)
-
-    def info(self, sid) -> dict:
-        return self.meta.get(sid, {})
-
-
 # ================================================================ 转录解析
 class SessionParser:
     """流式解析单个会话转录，抽取需求、工具画像、写盘动作、决策片段"""
@@ -585,123 +535,49 @@ class SessionParser:
         self.turns = 0
 
     # ---------- 主入口
-    def parse(self, want_written: bool = False):
-        try:
-            with open(self.path, "r", encoding="utf-8", errors="replace") as f:
-                for line in f:
-                    # 体积优化：reasoning / 快照记录占大头且无用，先按子串跳过
-                    if '"type":"reasoning"' in line or '"type":"file-history-snapshot"' in line:
-                        continue
-                    if '"type":"function_call_result"' in line:
-                        self._on_tool_result(line)
-                        continue
-                    try:
-                        o = json.loads(line)
-                    except Exception:
-                        continue  # 会话仍在写入时尾部可能是半行
-                    t = o.get("type")
-                    ts = o.get("timestamp")
-                    if ts:
-                        self.first_ts = ts if self.first_ts is None else min(self.first_ts, ts)
-                        self.last_ts = ts if self.last_ts is None else max(self.last_ts, ts)
-                    if t == "ai-title":
-                        ti = (o.get("title") or o.get("text") or "").strip()
-                        if ti and ti not in self.titles:
-                            self.titles.append(ti)
-                    elif t == "message":
-                        self._on_message(o)
-                    elif t == "function_call":
-                        self._on_tool_call(o, want_written)
-        except Exception as e:
-            log(f"  [warn] 解析失败 {self.path.name}: {e}")
-        return self
+    def parse(self, adapter=None, want_written: bool = False):
+        """按指定适配器的事件流解析；不传 adapter 时使用默认平台。"""
+        adapter = adapter or get_adapter()
+        return self.consume(adapter.iter_events(self.path, self.cwd), want_written)
 
-    def _on_message(self, o):
-        role = o.get("role")
-        content = o.get("content")
-        if not isinstance(content, list):
-            return
-        for item in content:
-            if not isinstance(item, dict):
-                continue
-            txt = item.get("text") or ""
-            if item.get("type") == "input_text" and role == "user":
-                clean = self._clean_prompt(txt)
-                if clean:
-                    self.user_prompts.append(clean)
+    def consume(self, events, want_written: bool = False):
+        """消费中立事件流，完成全部抽取。
+
+        平台差异（JSON 结构、字段名、注入块）已在适配器层抹平，
+        这里只处理语义，不认识任何平台的原始格式。
+        """
+        for ev in events:
+            kind = ev.get("kind")
+            if kind == EV_TS:
+                ts = ev.get("value")
+                if ts:
+                    self.first_ts = ts if self.first_ts is None else min(self.first_ts, ts)
+                    self.last_ts = ts if self.last_ts is None else max(self.last_ts, ts)
+            elif kind == EV_TITLE:
+                ti = (ev.get("text") or "").strip()
+                if ti and ti not in self.titles:
+                    self.titles.append(ti)
+            elif kind == EV_PROMPT:
+                txt = (ev.get("text") or "").strip()
+                if txt:
+                    self.user_prompts.append(txt)
                     self.turns += 1
-            elif item.get("type") == "output_text" and role == "assistant":
+            elif kind == EV_ASSISTANT:
+                txt = ev.get("text") or ""
                 self.assistant_chars += len(txt)
                 self._collect_decisions(txt)
-
-    def _clean_prompt(self, txt: str) -> str:
-        """剥掉注入的 system-reminder / 身份上下文，只留用户真实提问"""
-        if not txt:
-            return ""
-        m = re.search(r"<user_query>(.*?)</user_query>", txt, re.S)
-        if m:
-            txt = m.group(1)
-        else:
-            txt = re.sub(r"<system-reminder.*?</system-reminder>", "\n", txt, flags=re.S)
-            txt = re.sub(r"<(?:current_time|user_info|identity_context|product_identity|"
-                         r"tone_and_style|memory|user_memory|project_context|connector-status|"
-                         r"craft_mode|project_layout|additional-data)[^>]*>", "", txt)
-        txt = re.sub(r"<[^>]{1,60}>", " ", txt)
-        txt = re.sub(r"[ \t]+", " ", txt).strip()
-        if len(txt) < 2 or txt.startswith("Caveat:"):
-            return ""
-        return txt
-
-    def _on_tool_call(self, o, want_written: bool):
-        name = o.get("name") or ""
-        self.tool_counts[name] = self.tool_counts.get(name, 0) + 1
-        if name not in ("Write", "Edit"):
-            return
-        args = o.get("arguments")
-        if isinstance(args, str):
-            try:
-                args = json.loads(args)
-            except Exception:
-                return
-        if not isinstance(args, dict):
-            return
-        fp = args.get("file_path") or args.get("path") or args.get("target_file") or ""
-        if not fp:
-            return
-        # 只关心落在本工作区内的写入
-        norm = fp.replace("\\", "/")
-        if self.cwd:
-            low = norm.lower()
-            base = self.cwd.rstrip("/")
-            if not (low == base or low.startswith(base + "/")):
-                return
-            rel = norm[len(base) + 1:] if low.startswith(base + "/") else norm
-        else:
-            rel = norm.split("/")[-1]
-        if not rel or rel.startswith(".."):
-            return
-        if name == "Write":
-            content = args.get("content")
-            if isinstance(content, str) and content:
-                self.written[rel] = content
-
-    def _on_tool_result(self, line: str):
-        """只扫错误线索，不保留完整输出（体积控制）"""
-        head = line[:1500]
-        if ERROR_HINT.search(head):
-            try:
-                o = json.loads(line)
-            except Exception:
-                return
-            txt = ""
-            c = o.get("content")
-            if isinstance(c, list):
-                txt = " ".join(i.get("text", "") for i in c if isinstance(i, dict))
-            elif isinstance(c, str):
-                txt = c
-            txt = (txt or "").strip().replace("\n", " ")
-            if txt:
-                self.errors.append(txt[:220])
+            elif kind == EV_TOOL:
+                name = ev.get("name") or ""
+                self.tool_counts[name] = self.tool_counts.get(name, 0) + 1
+            elif kind == EV_WRITE:
+                rel, content = ev.get("rel"), ev.get("content")
+                if rel and isinstance(content, str) and content:
+                    self.written[rel] = content
+            elif kind == EV_TOOL_RESULT:
+                txt = (ev.get("text") or "").strip()
+                if txt:
+                    self.errors.append(txt[:220])
+        return self
 
     def _collect_decisions(self, txt: str):
         if not txt or len(self.decisions) >= DEFAULTS["max_snippets"] * 3:
@@ -989,7 +865,7 @@ class Lock:
 
 
 # ================================================================ 采集阶段
-def collect_projects(idx: SessionIndex, min_code: int, only: str = "", limit: int = 0,
+def collect_projects(idx, min_code: int, only: str = "", limit: int = 0,
                      dir_map: dict = None):
     """把会话按 workspace 归并成项目单元"""
     groups = {}
@@ -1006,7 +882,7 @@ def collect_projects(idx: SessionIndex, min_code: int, only: str = "", limit: in
             "created": info.get("created"),
             "updated": info.get("updated"),
             "automation": info.get("automation", False),
-            "has_transcript": sid in idx.jsonl,
+            "has_transcript": bool(idx.transcript(sid)),
         })
     projects = []
     for key, g in groups.items():
@@ -1587,8 +1463,11 @@ def run_scan(target: Path, dry_run=False, limit=0, only="", force=False,
              full_copy=False, min_code=None, verbose=True):
     t0 = now_ts()
     min_code = min_code or DEFAULTS["min_code_files"]
-    idx = SessionIndex().load()
-    log(f"[1/5] 会话索引：{len(idx.ids())} 个会话，{len(idx.jsonl)} 份转录")
+    adapter = get_adapter()
+    idx = adapter.load_index()
+    all_ids = idx.ids()
+    n_transcript = sum(1 for sid in all_ids if idx.transcript(sid))
+    log(f"[1/5] 会话索引：{len(all_ids)} 个会话，{n_transcript} 份转录")
 
     # 供 --only 同时匹配归档目录名（state 尚未加载，先轻量读一次）
     _dir_map = {}
@@ -1652,7 +1531,7 @@ def run_scan(target: Path, dry_run=False, limit=0, only="", force=False,
             tp = idx.transcript(s["sid"])
             if not tp:
                 continue
-            parses[s["sid"]] = SessionParser(tp, p.workspace).parse().summary()
+            parses[s["sid"]] = SessionParser(tp, p.workspace).parse(adapter).summary()
 
         refine_name(p, parses)
 
