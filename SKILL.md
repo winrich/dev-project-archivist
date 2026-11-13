@@ -1,6 +1,6 @@
 ---
 name: dev-project-archivist
-description: 当用户要求「整理/归档我在各个对话里开发的软件和小工具」「把分散在对话窗口里的项目收拢到一个目录」「扫描历史对话提取源码与技术实现」「建立项目总索引并定期同步」时使用。基于本机 WorkBuddy 会话数据库与转录文件（不依赖联网），识别各工作区中开发的项目，归档**可直接继续开发的纯源码**（剔除构建产物、依赖、截图、临时脚本）、项目背景与分模块功能说明，并给出可一键跳回原对话的深链，输出到指定目录并支持增量同步与夜间大模型归纳。
+description: 当用户要求「整理/归档我在各个对话里开发的软件和小工具」「把分散在对话窗口里的项目收拢到一个目录」「扫描历史对话提取源码与技术实现」「建立项目总索引并定期同步」时使用。读取本机 AI 工具的会话数据（内置 WorkBuddy 与 Claude Code 适配器，其他平台可按同一接口扩展，全程不依赖联网），识别各工作区中开发的项目，归档**可直接继续开发的纯源码**（剔除构建产物、依赖、截图、临时脚本）、项目背景与分模块功能说明，并给出可一键跳回原对话的深链，输出到指定目录并支持增量同步与夜间大模型归纳。
 agent_created: true
 ---
 
@@ -10,8 +10,9 @@ agent_created: true
 
 ## 何时使用
 
-- 「帮我整理一下这几年在 WorkBuddy 里做过的项目」
+- 「帮我整理一下这几年在 AI 对话里做过的项目」
 - 「对话里开发的小工具都散了，收拢到一个文件夹」
+- 「我用的是 Claude Code，也想把项目归档起来」
 - 「每天自动扫描新做的项目并同步变化」
 - 「归档目录要有个总索引，能看到每个项目是干什么的、用什么语言写的」
 
@@ -107,15 +108,20 @@ python .../archiver.py render
 
 ## 回原对话继续开发
 
-已确认 WorkBuddy 官方深链格式为 **`workbuddy://chat/<sessionId>`**，其中 `sessionId` 即 `sessions.id`（与 jsonl 文件名一致）。归档器三处提供入口：
+回跳方式按平台分派，没有深链能力的平台降级为文字说明，**不会产出点不开的死链**。
+
+| 平台 | 深链格式 | 手写跳转 |
+|---|---|---|
+| WorkBuddy | `workbuddy://chat/<会话ID>` | 浏览器/资源管理器地址栏粘贴 |
+| Claude Code | 无 | 在项目目录执行 `claude --resume <会话ID>` |
+
+三处入口：
 
 | 入口 | 位置 | 说明 |
 |---|---|---|
-| README「原始对话」表 | 每个项目 README | 每个会话一行，点「打开对话」直接跳转 |
-| `打开原对话.bat` | 项目根目录 | 双击直达最近一次会话 |
+| README「原始对话」表 | 每个项目 README | 每个会话一行，有深链时可点「打开对话」，否则标注「无深链」 |
+| `打开原对话.bat` | 项目根目录 | 双击直达最近一次会话；无深链平台改生成 `打开原对话.md` 写明恢复方式 |
 | `_meta/conversations.md` | 项目元数据目录 | 该项目**全部用户指令原文**按时间排列，不跳转也能看需求演进 |
-
-手写跳转：浏览器/资源管理器地址栏粘贴 `workbuddy://chat/<会话ID>`。
 
 ## 常用命令
 
@@ -129,6 +135,7 @@ python .../archiver.py render
 | `render` | 由摘要生成 README 与总索引（幂等，可反复跑） |
 | `render --no-rename` | 不按摘要标题重命名目录 |
 | `run` | scan + render |
+| `--source all\|workbuddy\|claude-code` | 选择数据来源，默认 `all` 自动探测；可逗号组合 |
 | `pending` | 列出待归纳的证据包路径 |
 | `status` | 查看上次运行、失联项目、缺摘要项目 |
 | `git-clean` | 重建由本工具创建的 git 仓库，清掉历史提交里的大对象 |
@@ -176,12 +183,31 @@ python .../archiver.py render
 
 ## 数据源
 
-- 会话元数据：`~/.workbuddy/workbuddy.db` 的 `sessions` 表（只读连接，失败降级为文件扫描）
-- 对话转录：`~/.workbuddy/projects/<cwd编码>/<sessionId>.jsonl`，会话 ID 与文件名一一对应
-- 工具调用：转录中 `type=function_call` 记录，含 `name` + `arguments`（写盘类用于恢复源码）
-- 产物索引：`~/.workbuddy/artifact-index/<sid>.json`
-- 文件快照：`~/.workbuddy/file-history/<sid>/<hash>@vN`
-- 工作区实体：`~/WorkBuddy/<workspace>/`（AI 从零创建）与其它路径（既有仓库，标记为 `external_repo`）
+平台差异全部封装在 `scripts/adapters/` 里，归档主流程只消费统一的中立事件。
+
+| 平台 | 适配器 | 会话数据位置 | 深链 |
+|---|---|---|---|
+| WorkBuddy | `workbuddy.py` | `~/.workbuddy/workbuddy.db` + `projects/<cwd编码>/<sid>.jsonl` | `workbuddy://chat/<会话ID>` |
+| Claude Code | `claude_code.py` | `~/.claude/projects/<路径编码>/<会话ID>.jsonl` | 无，降级为 `claude --resume <会话ID>` |
+
+- `--source` 选择来源：默认 `all`（自动探测本机装了哪些），也可写 `workbuddy`、`claude-code` 或逗号组合。某平台在本机没有数据时自动跳过，不报错。
+- 工作区实体即会话的 `cwd`：落在 `~/WorkBuddy/` 下标记为「AI 从零创建」，其余标记为 `external_repo`。
+- 项目记忆：WorkBuddy 读 `<cwd>/.workbuddy/memory/*.md`；Claude Code 无此概念，自动跳过，不影响其余归档。
+
+### 新增一个平台
+
+在 `scripts/adapters/` 下新建文件，实现 `Adapter` 子类，再到 `__init__.py` 末尾 `register()`，主程序一行不用改：
+
+```python
+class MyAdapter(Adapter):
+    name = "my-tool"           # 也是 --source 的取值
+    display = "My Tool"
+    def probe(self) -> bool: ...               # 本机是否存在该平台数据
+    def load_index(self): ...                  # 返回 Index：ids() / info(sid) / transcript(sid)
+    def iter_events(self, path, cwd=""): ...   # 逐条产出 7 种中立事件
+```
+
+事件规范与辅助函数（`rel_in_cwd` / `clean_prompt` / `iso_to_ms`）见 `scripts/adapters/base.py` 顶部注释。两条硬要求：`info()` 里的 `created` / `updated` 必须是**毫秒整数**（否则跨平台排序会抛 TypeError）；工具调用路径必须经 `rel_in_cwd()` 归一，工作区外的写入一律丢弃。改完运行 `python scripts/tests/test_adapters.py`。
 
 分类：源码文件数 ≥ 5 且不低于文档数的 30% → 代码项目；否则有文档 → 文档任务。只有代码项目/混合产物建目录，文档任务仅在 `state.json` 留一行；曾归档过但已降级的目录移入 `_trash/`。
 

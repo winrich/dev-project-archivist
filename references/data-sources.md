@@ -1,6 +1,13 @@
-# 本机数据源实测规格（2026-11-13 核实）
+# 数据源规格
 
-这些是本机实际存在的路径与格式，改动解析逻辑前请先回归验证。
+平台差异封装在 `scripts/adapters/`，本文档记录各平台的实际路径与格式。改动解析逻辑前先回归验证。
+
+| 平台 | 适配器 | 核实状态 |
+|---|---|---|
+| WorkBuddy | `adapters/workbuddy.py` | ✅ 2026-11-13 本机实测 |
+| Claude Code | `adapters/claude_code.py` | ⚠️ 按公开规范实现，本机无数据，待真机确认 |
+
+以下第 1–7 节为 WorkBuddy 的本机实测规格。
 
 ## 1. 会话数据库
 
@@ -71,3 +78,30 @@ updated_at / deleted_at / is_playground / model / is_background_automation ...`
 | 中文路径下用 shell 删目录 | 会走安全删除并 fail-closed | 一律用 Python 的 `shutil.rmtree` |
 | 正则里 `(?i)` 写在中段 | `re.PatternError: global flags not at the start` | 拆成两个模式或使用 `re.I` 参数 |
 | `--force` 重算目录名 | 会留下旧目录形成重复 | 目录名一旦分配即保持，改名只由 render 按摘要标题做一次 |
+
+## 8. Claude Code（按公开规范实现，本机未实测）
+
+`~/.claude/projects/<路径编码>/<会话UUID>.jsonl`
+
+- 路径编码：项目绝对路径里所有非字母数字字符换成 `-`（`/Users/me/shop-api` → `-Users-me-shop-api`）。**编码不可逆**，所以 cwd 一律从记录里读，不从目录名反推。
+- 顶层字段：`type / uuid / parentUuid / timestamp / sessionId / cwd / gitBranch / version`。
+- `type` 取值：`user` / `assistant` / `custom-title` / `ai-title` / `summary` / `system` / `attachment` / `queue-operation` / `pr-link` / `result` / `file-history-snapshot`。
+- `message.content` **永远是数组**，即使只有一段文字。
+- assistant 的内容块：`text` / `thinking` / `tool_use{id,name,input}`。
+- user 的内容块：`text` / `tool_result{tool_use_id, content}`；其中 `content` 可能是字符串，也可能是 `[{type:text,text:...}]`，两种都要接。
+- 子代理记录混在主文件里，带 `isSidechain: true`，必须过滤；子代理自己的文件在 `<session>/subagents/*.jsonl`，glob 只取一级目录即可避开。
+- 用户记录里混有 `isMeta: true` 的元信息、`[Request interrupted` 中断标记，都不算真实提问。
+- 同一条 assistant 消息按内容块逐行写入，`usage` 会重复；本适配器不读 usage，无影响。
+- **时间戳是 ISO 8601 字符串**，索引层必须转毫秒整数，否则与 WorkBuddy 混排时 `min()` 抛 TypeError。
+- 无深链，回跳降级为 `claude --resume <会话ID>`；也没有项目记忆目录概念。
+
+待真机确认：`ai-title` 的字段名、`isMeta` 是否稳定存在、Write 工具的 `input` 键名（当前按 `file_path` + `content` 处理，并兼容 `path` / `target_file`）。
+
+## 9. 适配器改造踩坑
+
+| 坑 | 现象 | 处置 |
+|---|---|---|
+| `import re` 写在正则定义之后 | 模块加载即 NameError | 导入统一放文件顶部 |
+| 跨平台时间格式混用（int 毫秒 vs ISO 字符串） | `min()` / `sorted()` 抛 TypeError | 索引层统一 `iso_to_ms()` 转毫秒整数 |
+| 深链硬编码 `workbuddy://` | 其他平台的归档里出现点不开的死链 | 按 `source` 分派，无深链则写 `.md` 说明 |
+| `.claude` 等工具配置目录混进源码 | 归档里带上本地权限配置 | 加入 `IGNORE_DIRS` |

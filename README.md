@@ -1,8 +1,8 @@
 # 对话项目归档器（dev-project-archivist）
 
-把散落在上百个 WorkBuddy 对话窗口里的软件项目，收拢成一份**可浏览、可移交、可长期同步**的本地源码档案。
+把散落在上百个 AI 对话窗口里的软件项目，收拢成一份**可浏览、可移交、可长期同步**的本地源码档案。
 
-每一轮"用对话做出来的软件"都会留下独立的会话，时间一长就再也找不到源码在哪、当时为什么这么做。本工具读本机的 WorkBuddy 会话数据，识别出你在各对话中实际开发的项目，按项目归档**可直接继续开发的纯源码**、项目背景、分模块功能说明、技术实现说明，并给出可一键跳回原对话的入口。
+每一轮"用对话做出来的软件"都会留下独立的会话，时间一长就再也找不到源码在哪、当时为什么这么做。本工具读本机 AI 编程工具（WorkBuddy / Claude Code）的会话数据，识别出你在各对话中实际开发的项目，按项目归档**可直接继续开发的纯源码**、项目背景、分模块功能说明、技术实现说明，并给出可一键跳回原对话的入口。
 
 ---
 
@@ -10,7 +10,7 @@
 
 | 你的目的 | 应该怎么做 |
 |---|---|
-| 我自己也在用 WorkBuddy，想把**我自己的**对话项目收拢 | 装本工具（继续往下读） |
+| 我自己也在用 AI 编程工具，想把**我自己的**对话项目收拢 | 装本工具（继续往下读） |
 | 我只想接手别人做好的某个项目继续开发 | **不要装工具**，直接拿那个项目目录（含 `source/`、`.git/`、`README.md`），`git clone` 或解压即可开工 |
 
 本工具不含任何项目数据，它只负责"把本机会话变成源码档案"。别人的会话数据在别人机器上，装了也扫不到。
@@ -23,8 +23,37 @@
 |---|---|
 | 操作系统 | Windows / macOS / Linux |
 | Python | 3.8 及以上（**无需 pip install**，只用标准库） |
-| WorkBuddy | 需有本地会话数据（`~/.workbuddy/`），否则扫不出东西 |
+| AI 工具 | 至少一个受支持工具的本地会话数据，见下节 |
 | git | 可选。装了才能给每个项目初始化独立仓库；没装只有该步骤跳过，其余功能正常 |
+
+---
+
+## 支持哪些 AI 工具
+
+| 工具 | 会话数据位置 | 状态 |
+|---|---|---|
+| WorkBuddy | `~/.workbuddy/` | ✅ 开箱即用，含 `workbuddy://` 深链 |
+| Claude Code | `~/.claude/projects/` | ✅ 开箱即用，无深链时降级为 `claude --resume` 提示 |
+| 其他本地 Agent | 需自行适配 | 见下方「接入其他工具」 |
+
+用 `--source` 选择来源：默认 `all` 自动探测本机装了哪些，也可写 `workbuddy`、`claude-code` 或逗号组合。本机没有某个工具的数据时自动跳过，不会报错。
+
+**为什么网页版 ChatGPT / Claude 不行**：它们把对话存在云端，代码从未以文件形式落到你的机器上，归档器拿不到「完整源码」这个最核心的交付物。本工具面向的是**能在本机写文件**的 Agent 类工具。
+
+### 接入其他工具
+
+`scripts/adapters/` 下每个文件对应一个平台。实现一个 `Adapter` 子类并在 `__init__.py` 末尾 `register()`，主程序一行都不用改：
+
+```python
+class MyAdapter(Adapter):
+    name = "my-tool"           # 也是 --source 的取值
+    display = "My Tool"
+    def probe(self) -> bool: ...               # 本机是否存在该平台数据
+    def load_index(self): ...                  # 返回 Index：ids() / info(sid) / transcript(sid)
+    def iter_events(self, path, cwd=""): ...   # 逐条产出 7 种中立事件
+```
+
+事件规范与现成的辅助函数在 `scripts/adapters/base.py` 顶部。两条硬要求：`info()` 的 `created`/`updated` 必须是**毫秒整数**（否则跨平台排序会崩）；工具路径必须过 `rel_in_cwd()` 归一。改完运行 `python scripts/tests/test_adapters.py`。
 
 ---
 
@@ -33,22 +62,29 @@
 **方式一：git clone（推荐，便于日后更新）**
 
 ```bash
+# WorkBuddy
 git clone https://github.com/winrich/dev-project-archivist.git ~/.workbuddy/skills/dev-project-archivist
+
+# Claude Code
+git clone https://github.com/winrich/dev-project-archivist.git ~/.claude/skills/dev-project-archivist
 ```
 
 **方式二：压缩包**
 
-解压后把整个 `dev-project-archivist` 目录放到 `~/.workbuddy/skills/` 下，确认最终路径为：
+解压后把整个 `dev-project-archivist` 目录放进对应工具的 skills 目录，确认最终路径为：
 
 ```
-~/.workbuddy/skills/dev-project-archivist/SKILL.md
+~/.workbuddy/skills/dev-project-archivist/SKILL.md     # WorkBuddy
+~/.claude/skills/dev-project-archivist/SKILL.md        # Claude Code
 ```
 
-装完**重启 WorkBuddy**，技能列表里才会出现。不重启也能用——直接跑命令行即可。
+装完**重启对应工具**，技能列表里才会出现。不装成技能也完全能用——直接跑命令行即可，归档逻辑不依赖宿主工具。
 
 ---
 
 ## 三步上手
+
+> 下文命令以 WorkBuddy 的安装路径为例。装在 Claude Code 下的，把 `~/.workbuddy/skills/` 换成 `~/.claude/skills/` 即可。
 
 ### 1. 先看分类，不写任何文件
 
@@ -78,7 +114,7 @@ python .../archiver.py run --target "D:\我的归档"
 
 ### 3. 在对话里用
 
-重启后可直接对 WorkBuddy 说：
+重启后可直接对 AI 助手说：
 
 > 把我在各个对话里开发的项目归档一下
 
@@ -140,13 +176,14 @@ python .../archiver.py run
 
 ## 回原对话继续开发
 
-已确认 WorkBuddy 官方深链格式为 `workbuddy://chat/<sessionId>`。三个入口：
+跳转方式按会话来源分派，没有深链能力的工具不会硬凑出点不开的链接。
 
-| 入口 | 说明 |
+| 平台 | 打开方式 |
 |---|---|
-| README 的「原始对话」表 | 每个会话一行，点「打开对话」直接跳转 |
-| 项目根目录 `打开原对话.bat` | 双击直达最近一次会话 |
-| `_meta/conversations.md` | 该项目全部用户指令原文按时间排列，不跳转也能看清需求演进 |
+| WorkBuddy | 点 README 里的「打开对话」，或双击项目根目录 `打开原对话.bat` |
+| Claude Code | 项目根目录的 `打开原对话.md` 里记着会话 ID 与 `claude --resume <ID>` 命令 |
+
+无论哪个平台，每个项目都有一份 `_meta/conversations.md`，按时间排列该项目**全部用户指令原文**，不跳转也能看清需求演进。
 
 ---
 
@@ -161,6 +198,7 @@ python .../archiver.py run
 | `scan --limit N` | 只处理最近 N 个项目 |
 | `render` | 由摘要生成 README 与总索引（幂等，可反复跑） |
 | `run` | scan + render |
+| `--source all\|workbuddy\|claude-code` | 选择数据来源，默认 `all` 自动探测；可逗号组合 |
 | `pending` | 列出证据有变化、需要重新归纳的项目路径 |
 | `status` | 上次运行时间、失联项目、缺摘要项目 |
 | `git-clean` | 重建本工具创建的仓库，清掉历史提交里的大对象 |
@@ -169,7 +207,7 @@ python .../archiver.py run
 
 ## 每日自动同步（可选）
 
-在 WorkBuddy 里建一个定时任务，提示词分三步：`scan` → 读 `pending` 逐个归纳 → `render`。
+在你的 AI 工具里建一个定时任务（WorkBuddy 的自动化、系统计划任务均可），提示词分三步：`scan` → 读 `pending` 逐个归纳 → `render`。
 完整可粘贴的提示词见 [`references/automation-prompt.md`](references/automation-prompt.md)。
 
 关键点：
