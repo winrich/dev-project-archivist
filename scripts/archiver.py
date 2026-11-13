@@ -47,7 +47,7 @@ from pathlib import Path, PurePosixPath
 # 但从其他位置 import 时需显式补一次，保证两种方式都能加载。
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from adapters import build_index, get_adapter, get_adapters  # noqa: E402
+from adapters import REGISTRY, build_index, get_adapter, get_adapters  # noqa: E402
 from adapters.base import (EV_ASSISTANT, EV_PROMPT,  # noqa: E402
                            EV_TITLE, EV_TOOL, EV_TOOL_RESULT, EV_TS, EV_WRITE)
 
@@ -166,6 +166,8 @@ IGNORE_DIRS = {
     ".next", ".nuxt", ".svelte-kit", ".gradle", ".dart_tool", "Pods",
     ".pytest_cache", ".mypy_cache", ".ruff_cache", ".cache", "coverage",
     ".git-crypt", "NDependOut", ".workbuddy",
+    # 各 AI 工具在项目内留下的本地配置/缓存，不属于源码
+    ".claude", ".cursor", ".codex", ".aider", ".continue", ".gemini",
     # 以下为临时/测试产物目录：不属于可移交源码
     "bin_tmp", "testresults", "htmlcov", "logs", "packages-cache",
     "blazor.boot.json.d", ".angular",
@@ -516,6 +518,29 @@ def log(msg: str, verbose: bool = True):
         print(msg, flush=True)
 
 
+def adapter_of(source: str = ""):
+    """按会话来源取适配器实例；来源未知时回退到默认适配器。"""
+    return REGISTRY.get(source or "") or get_adapter()
+
+
+def deep_link_of(sid: str, source: str = "") -> str:
+    """生成指向原始对话的深链；平台不支持深链时返回空串，由调用方降级为文字提示。"""
+    if not sid:
+        return ""
+    try:
+        return adapter_of(source).deep_link(sid)
+    except Exception:
+        return ""
+
+
+def open_hint_of(source: str = "") -> str:
+    """无深链平台的回跳说明文案。"""
+    try:
+        return adapter_of(source).open_hint()
+    except Exception:
+        return "在对应的 AI 工具中打开该会话"
+
+
 # ================================================================ 转录解析
 class SessionParser:
     """流式解析单个会话转录，抽取需求、工具画像、写盘动作、决策片段"""
@@ -770,8 +795,15 @@ class Project:
         return safe_name(Path(self.workspace).name)
 
     def _load_memory(self, ws: Path) -> str:
-        """读取工作区项目记忆（requirement: 回顾开发过程记忆）"""
-        md = ws / ".workbuddy" / "memory"
+        """读取工作区项目记忆（requirement: 回顾开发过程记忆）。
+
+        记忆目录由来源平台决定；平台无此概念时返回空，不影响其余归档。
+        """
+        src = self.sessions[0].get("source") if self.sessions else ""
+        md = adapter_of(src or "").memory_dir(ws)
+        if not md:
+            return ""
+        md = Path(md)
         if not md.exists():
             return ""
         parts = []
@@ -1193,8 +1225,12 @@ def recover_deleted(p: Project, parses: dict, dest: Path, stats: dict,
 
 
 def copy_memory(p: Project, dest: Path):
-    """把工作区项目记忆另存一份，便于日后回溯"""
-    md = Path(p.workspace) / ".workbuddy" / "memory"
+    """把工作区项目记忆另存一份，便于日后回溯（目录由来源平台决定）"""
+    src = p.sessions[0].get("source") if p.sessions else ""
+    md = adapter_of(src or "").memory_dir(Path(p.workspace))
+    if not md:
+        return 0
+    md = Path(md)
     if not md.exists():
         return 0
     n = 0
@@ -1588,6 +1624,7 @@ def run_scan(target: Path, dry_run=False, limit=0, only="", force=False,
         atomic_write(ev_path, ev)
 
         # manifest
+        latest = max(p.sessions, key=lambda x: x.get("created") or 0) if p.sessions else None
         manifest = {
             "name": p.name,
             "workspace": p.workspace,
@@ -1599,13 +1636,14 @@ def run_scan(target: Path, dry_run=False, limit=0, only="", force=False,
             "first_dev": iso(p.first_ts),
             "last_dev": iso(p.last_ts),
             "archived_at": iso(now_ts()),
-            # 回原对话：workbuddy://chat/<sid> 可直接跳转
-            "open_conversation": (
-                "workbuddy://chat/" + max(p.sessions, key=lambda x: x.get("created") or 0)["sid"]
-                if p.sessions else ""),
+            # 回原对话：深链由各平台适配器提供，无深链时为空并降级为文字提示
+            "open_conversation": (deep_link_of(latest["sid"], latest.get("source") or "")
+                                  if latest else ""),
+            "open_hint": open_hint_of(latest.get("source") or "") if latest else "",
             "sessions": [{"sid": s["sid"], "title": md_cell(s.get("title"), 120),
                           "created": iso(s.get("created")),
-                          "url": f"workbuddy://chat/{s['sid']}",
+                          "source": s.get("source") or "",
+                          "url": deep_link_of(s["sid"], s.get("source") or ""),
                           "automation": s.get("automation", False)} for s in p.sessions],
             "counts": {"turns": sum(x.get("turns", 0) for x in parses.values()),
                        "tool_calls": sum(sum((x.get("tool_counts") or {}).values())
@@ -1633,8 +1671,8 @@ def run_scan(target: Path, dry_run=False, limit=0, only="", force=False,
                      json.dumps(manifest["sessions"], ensure_ascii=False, indent=2))
         atomic_write(adir / META_DIR / CONVERSATIONS_FILE,
                      build_conversations(p, parses))
-        make_open_bat(adir, max(p.sessions, key=lambda x: x.get("created") or 0)["sid"]
-                      if p.sessions else "")
+        make_open_bat(adir, latest["sid"] if latest else "",
+                      (latest.get("source") or "") if latest else "")
 
         # 独立 git 仓库：便于日后提交与他人 clone 继续开发
         # 注意：git 状态不写入 manifest（否则每次提交都会产生 manifest 变更）
@@ -1695,8 +1733,9 @@ def build_conversations(p: Project, parses: dict) -> str:
     L.append(f"> 本项目由 {len(p.sessions)} 个会话逐步开发而成。"
              "点击「打开对话」可直接跳回该会话继续开发。")
     L.append("")
-    L.append(f"> 最近一次会话：`{max(p.sessions, key=lambda x: x.get('created') or 0)['sid']}`"
-             if p.sessions else "> 未关联会话")
+    latest = max(p.sessions, key=lambda x: x.get("created") or 0) if p.sessions else None
+    src = (latest or {}).get("source") or ""
+    L.append(f"> 最近一次会话：`{latest['sid']}`" if latest else "> 未关联会话")
     L.append("")
 
     ordered = sorted(p.sessions, key=lambda x: x.get("created") or 0)
@@ -1709,7 +1748,9 @@ def build_conversations(p: Project, parses: dict) -> str:
         L.append("|---|---|")
         L.append(f"| 时间 | {iso(s.get('created')) or '—'} |")
         L.append(f"| 会话 ID | `{sid}` |")
-        L.append(f"| 直接打开 | [workbuddy://chat/{sid}](workbuddy://chat/{sid}) |")
+        _link = deep_link_of(sid, s.get("source") or "")
+        L.append(f"| 直接打开 | [{_link}]({_link}) |" if _link
+                 else f"| 直接打开 | 该平台无深链，{open_hint_of(s.get('source') or '')} |")
         if s.get("automation"):
             L.append("| 备注 | 该会话由自动化任务触发 |")
         L.append("")
@@ -1745,20 +1786,35 @@ def build_conversations(p: Project, parses: dict) -> str:
             L.append("")
     L.append("---")
     L.append("")
-    L.append("> 跳转方式：在浏览器/资源管理器地址栏粘贴 `workbuddy://chat/<会话ID>`，"
-             "或双击项目根目录的 `打开原对话.bat`。")
+    L.append(f"> 跳转方式：{open_hint_of(src)}，或双击项目根目录的 `{OPEN_BAT}`。")
     L.append("")
     return "\n".join(L)
 
 
-def make_open_bat(adir: Path, latest_sid: str) -> bool:
-    """生成双击即可跳回最近一次原对话的批处理（纯 ASCII 内容，避免编码问题）"""
+def make_open_bat(adir: Path, latest_sid: str, source: str = "") -> bool:
+    """生成双击即可跳回最近一次原对话的快捷方式。
+
+    有深链的平台生成 .bat 直接拉起（内容纯 ASCII，避免编码问题）；
+    无深链的平台改生成同名 .md 说明，避免产出点不开的死链。
+    """
     if not latest_sid:
         return False
-    body = ("@echo off\r\n"
-            "start \"\" \"workbuddy://chat/%s\"\r\n" % latest_sid)
+    link = deep_link_of(latest_sid, source)
+    if link:
+        body = ("@echo off\r\n"
+                "start \"\" \"%s\"\r\n" % link)
+        try:
+            atomic_write(adir / OPEN_BAT, body)
+            return True
+        except Exception:
+            return False
+    ad = adapter_of(source)
+    body = ("# 打开原始对话\n\n"
+            "本项目由 **%s** 中的会话逐步开发而成，该平台不支持一键跳转。\n\n"
+            "- 会话 ID：`%s`\n"
+            "- 打开方式：%s\n" % (ad.display or ad.name, latest_sid, ad.open_hint()))
     try:
-        atomic_write(adir / OPEN_BAT, body)
+        atomic_write(adir / OPEN_BAT.rsplit(".", 1)[0] + ".md", body)
         return True
     except Exception:
         return False
@@ -1996,19 +2052,26 @@ def render_readme(adir: Path, state_proj: dict, ov: dict = None) -> str:
     # ---- 原始对话（可一键跳回继续开发）----
     L.append("## 原始对话")
     L.append("")
-    L.append(f"本项目由 {len(sessions)} 个会话逐步开发而成，点击「打开」可直接跳回该会话继续开发。")
+    L.append(f"本项目由 {len(sessions)} 个会话逐步开发而成，"
+             + ("点击「打开」可直接跳回该会话继续开发。" if m.get("open_conversation")
+                else "各会话 ID 可用于在对应工具中恢复。"))
     L.append("")
     L.append("| # | 时间 | 会话 | 打开 |")
     L.append("|---|---|---|---|")
     for i, x in enumerate(sessions[:30], 1):
         tag = "（自动化）" if x.get("automation") else ""
         sid = x.get("sid") or ""
+        link = x.get("url") or deep_link_of(sid, x.get("source") or "")
+        opened = f"[打开对话]({link})" if link else "无深链"
         L.append(f"| {i} | {md_cell(x.get('created'), 16)} "
                  f"| {md_cell(x.get('title'), 48) or '(未命名)'}{tag} "
-                 f"| [打开对话](workbuddy://chat/{sid}) |")
+                 f"| {opened} |")
     L.append("")
     L.append("> 全部用户指令原文（按时间顺序）见 [`_meta/conversations.md`](./_meta/conversations.md)。")
-    L.append(f"> 也可双击项目根目录的 `{OPEN_BAT}` 直达最近一次会话。")
+    if m.get("open_conversation"):
+        L.append(f"> 也可双击项目根目录的 `{OPEN_BAT}` 直达最近一次会话。")
+    elif m.get("open_hint"):
+        L.append(f"> 该平台不支持深链，恢复方式：{m['open_hint']}。")
     L.append("")
 
     # ---- 概览 ----

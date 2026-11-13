@@ -54,6 +54,8 @@ def available() -> list:
 
 
 # ---------------------------------------------------------------- 内置适配器
+from .claude_code import ClaudeCodeAdapter  # noqa: E402
 from .workbuddy import WorkBuddyAdapter  # noqa: E402
 
 register(WorkBuddyAdapter)
+register(ClaudeCodeAdapter)

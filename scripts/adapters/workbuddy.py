@@ -22,6 +22,7 @@ from pathlib import Path
 
 from .base import (Adapter, ERROR_HINT, EV_ASSISTANT, EV_PROMPT, EV_TITLE,
                    EV_TOOL, EV_TOOL_RESULT, EV_TS, EV_WRITE, Index, rel_in_cwd)
+from .base import clean_prompt as _clean_prompt
 
 HOME = Path.home()
 WB_HOME = HOME / ".workbuddy"
@@ -39,20 +40,8 @@ _INJECT_BLOCK = re.compile(
 
 
 def clean_prompt(txt: str) -> str:
-    """剥掉注入的 system-reminder / 身份上下文，只留用户真实提问。"""
-    if not txt:
-        return ""
-    m = re.search(r"<user_query>(.*?)</user_query>", txt, re.S)
-    if m:
-        txt = m.group(1)
-    else:
-        txt = re.sub(r"<system-reminder.*?</system-reminder>", "\n", txt, flags=re.S)
-        txt = _INJECT_BLOCK.sub("", txt)
-    txt = re.sub(r"<[^>]{1,60}>", " ", txt)
-    txt = re.sub(r"[ \t]+", " ", txt).strip()
-    if len(txt) < 2 or txt.startswith("Caveat:"):
-        return ""
-    return txt
+    """剥离 WorkBuddy 特有的身份注入块后，交回通用清洗。"""
+    return _clean_prompt(txt, _INJECT_BLOCK)
 
 
 # ---------------------------------------------------------------- 会话索引

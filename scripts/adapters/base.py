@@ -22,6 +22,7 @@
 """
 
 import re
+from datetime import datetime
 
 
 # ---------------------------------------------------------------- 事件类型
@@ -36,6 +37,45 @@ EV_TOOL_RESULT = "tool_result"
 # 工具输出中的错误线索（通用启发式，不含平台特征）
 ERROR_HINT = re.compile(
     r"(错误|失败|异常|不通过|报错|Error|error:|Exception|CS\d{4}|fail)", re.I)
+
+_SYS_REMINDER = re.compile(r"<system-reminder.*?</system-reminder>", re.S)
+_USER_QUERY = re.compile(r"<user_query>(.*?)</user_query>", re.S)
+_ANY_TAG = re.compile(r"<[^>]{1,60}>")
+_SPACES = re.compile(r"[ \t]+")
+
+
+def iso_to_ms(value):
+    """ISO 8601 字符串 → 毫秒整数。各平台时间戳统一成毫秒，才能跨源排序比较。"""
+    if not value:
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    try:
+        return int(datetime.fromisoformat(str(value).strip().replace("Z", "+00:00")).timestamp() * 1000)
+    except Exception:
+        return None
+
+
+def clean_prompt(txt: str, inject_pat=None) -> str:
+    """剥掉注入的上下文块，只留用户真实提问。
+
+    inject_pat 用于剥离平台特有的成对注入标签（如 WorkBuddy 的身份块），
+    不传时只做通用的 system-reminder 与孤立标签清理。
+    """
+    if not txt:
+        return ""
+    m = _USER_QUERY.search(txt)
+    if m:
+        txt = m.group(1)
+    else:
+        txt = _SYS_REMINDER.sub("\n", txt)
+        if inject_pat is not None:
+            txt = inject_pat.sub("", txt)
+    txt = _ANY_TAG.sub(" ", txt)
+    txt = _SPACES.sub(" ", txt).strip()
+    if len(txt) < 2 or txt.startswith("Caveat:"):
+        return ""
+    return txt
 
 
 def rel_in_cwd(raw_path: str, cwd: str) -> str:
