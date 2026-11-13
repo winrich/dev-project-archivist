@@ -8,7 +8,7 @@
 主程序与其余归档逻辑无需任何改动。
 """
 
-from .base import Adapter, Index  # noqa: F401  （对外暴露）
+from .base import Adapter, Index, MultiIndex  # noqa: F401  （对外暴露）
 
 REGISTRY = {}
 
@@ -28,6 +28,24 @@ def get_adapter(name: str = "workbuddy") -> Adapter:
         if a.probe():
             return a
     return REGISTRY.get("workbuddy") or next(iter(REGISTRY.values()))
+
+
+def get_adapters(names=None) -> list:
+    """按名称取适配器列表。
+
+    names 为空或含 "all" 时返回本机探测到数据的全部适配器；
+    显式指定的适配器即使探测不到也保留（便于用测试数据驱动）。
+    """
+    if not names or "all" in names:
+        found = [a for a in REGISTRY.values() if a.probe()]
+        return found or [get_adapter()]
+    out = [REGISTRY[n] for n in names if n in REGISTRY]
+    return out or [get_adapter()]
+
+
+def build_index(adapters) -> MultiIndex:
+    """把若干适配器的索引聚合为一个，供主程序统一使用。"""
+    return MultiIndex([(a.name, a.load_index()) for a in adapters])
 
 
 def available() -> list:

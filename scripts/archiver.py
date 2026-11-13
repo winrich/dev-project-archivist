@@ -47,7 +47,7 @@ from pathlib import Path, PurePosixPath
 # 但从其他位置 import 时需显式补一次，保证两种方式都能加载。
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from adapters import get_adapter  # noqa: E402
+from adapters import build_index, get_adapter, get_adapters  # noqa: E402
 from adapters.base import (EV_ASSISTANT, EV_PROMPT,  # noqa: E402
                            EV_TITLE, EV_TOOL, EV_TOOL_RESULT, EV_TS, EV_WRITE)
 
@@ -878,6 +878,7 @@ def collect_projects(idx, min_code: int, only: str = "", limit: int = 0,
         groups.setdefault(key, {"workspace": cwd, "sessions": []})
         groups[key]["sessions"].append({
             "sid": sid,
+            "source": info.get("source") or "",
             "title": info.get("title") or "",
             "created": info.get("created"),
             "updated": info.get("updated"),
@@ -1460,11 +1461,12 @@ def project_fingerprint(p: Project, parses: dict) -> str:
 
 # ================================================================ 扫描主流程
 def run_scan(target: Path, dry_run=False, limit=0, only="", force=False,
-             full_copy=False, min_code=None, verbose=True):
+             full_copy=False, min_code=None, verbose=True, sources=None):
     t0 = now_ts()
     min_code = min_code or DEFAULTS["min_code_files"]
-    adapter = get_adapter()
-    idx = adapter.load_index()
+    adapters = get_adapters(sources)
+    by_name = {a.name: a for a in adapters}
+    idx = build_index(adapters)
     all_ids = idx.ids()
     n_transcript = sum(1 for sid in all_ids if idx.transcript(sid))
     log(f"[1/5] 会话索引：{len(all_ids)} 个会话，{n_transcript} 份转录")
@@ -1531,7 +1533,8 @@ def run_scan(target: Path, dry_run=False, limit=0, only="", force=False,
             tp = idx.transcript(s["sid"])
             if not tp:
                 continue
-            parses[s["sid"]] = SessionParser(tp, p.workspace).parse(adapter).summary()
+            ad = by_name.get(s.get("source") or "") or adapters[0]
+            parses[s["sid"]] = SessionParser(tp, p.workspace).parse(ad).summary()
 
         refine_name(p, parses)
 
@@ -2287,7 +2290,11 @@ def main():
     ap.add_argument("--full-copy", action="store_true", help="复制全部文件（含媒体/二进制）")
     ap.add_argument("--min-code", type=int, default=None, help="判定代码项目的源码文件数下限")
     ap.add_argument("--no-rename", action="store_true", help="渲染时不按摘要标题重命名目录")
+    ap.add_argument("--source", default="all",
+                    help="数据来源：all（默认，自动探测本机全部平台）或逗号分隔的适配器名")
     a = ap.parse_args()
+
+    sources = [x.strip() for x in (a.source or "").split(",") if x.strip()]
 
     target = Path(a.target)
     if a.cmd == "status":
@@ -2299,13 +2306,13 @@ def main():
 
     if a.dry_run:
         return run_scan(target, dry_run=True, limit=a.limit, only=a.only,
-                        force=True, min_code=a.min_code)
+                        force=True, min_code=a.min_code, sources=sources)
 
     target.mkdir(parents=True, exist_ok=True)
     with Lock(target):
         if a.cmd in ("scan", "run"):
             res = run_scan(target, limit=a.limit, only=a.only, force=a.force,
-                           full_copy=a.full_copy, min_code=a.min_code)
+                           full_copy=a.full_copy, min_code=a.min_code, sources=sources)
             if isinstance(res, int) and res != 0:
                 return res
             if a.cmd == "run" and isinstance(res, dict):

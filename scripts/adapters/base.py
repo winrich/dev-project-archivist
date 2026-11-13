@@ -77,6 +77,38 @@ class Index:
         return None
 
 
+class MultiIndex(Index):
+    """把多个平台的索引聚合成一个。
+
+    sid 在各平台之间理论上不会撞（多为 UUID），一旦撞了则加 `<平台>:` 前缀，
+    原始 sid 保留在 _origin 里，transcript 仍能正确取到。
+    """
+
+    def __init__(self, pairs=None):
+        self.meta = {}
+        self._origin = {}   # 聚合后的 sid -> (原 index, 原 sid)
+
+        for name, ix in (pairs or []):
+            for sid in ix.ids():
+                key = sid
+                if key in self.meta:
+                    key = f"{name}:{sid}"
+                info = dict(ix.info(sid) or {})
+                info["source"] = name
+                self.meta[key] = info
+                self._origin[key] = (ix, sid)
+
+    def ids(self):
+        return set(self.meta)
+
+    def info(self, sid):
+        return self.meta.get(sid, {})
+
+    def transcript(self, sid):
+        pair = self._origin.get(sid)
+        return pair[0].transcript(pair[1]) if pair else None
+
+
 # ---------------------------------------------------------------- 适配器基类
 class Adapter:
     """平台适配器基类。
