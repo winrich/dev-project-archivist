@@ -103,14 +103,10 @@ python .../archiver.py run --target "D:\my-archive"
 
 ```mermaid
 flowchart LR
-  A["Local sessions<br/>~/.workbuddy · ~/.claude"] --> B["Adapter<br/>normalise into 7 neutral events"]
-  B --> C["SessionParser<br/>prompts · writes · decisions · errors"]
-  C --> D["Classify<br/>code project / document task"]
-  D --> E["Extract source<br/>tiered noise removal"]
-  E --> F["Render<br/>README · index · standalone repo"]
-  F --> G[("state.json<br/>fingerprints")]
-  G -. incremental diff .-> B
+  A["Local sessions<br/>~/.workbuddy"] --> B["Adapter<br/>7 neutral events"] --> C["Parse · classify"] --> D["Extract source<br/>drop noise"] --> E["Render<br/>git init"] --> G[("Fingerprints<br/>next run")]
 ```
+
+The fingerprint store keeps three-level hashes (workspace / file / content). The next run compares before parsing, which is why a steady-state run makes zero model calls.
 
 The one-liner:
 
@@ -128,20 +124,19 @@ Every platform difference lives in `adapters/`; the main program never sees anot
 
 ```mermaid
 flowchart TB
-  subgraph AD["adapters/ · platform-specific · thin"]
+  subgraph AD["adapters/ · per platform · thin"]
+    direction LR
     W["workbuddy.py"]
     CC["claude_code.py"]
     MINE["your_tool.py"]
+    W ~~~ CC ~~~ MINE
   end
+  E{{"7 neutral events"}}
   subgraph CORE["archiver.py · platform-agnostic · thick"]
-    P["SessionParser<br/>consumes events"]
-    X["classify · extract · copy"]
-    R["render · git · incremental state"]
+    direction TB
+    P["SessionParser"] --> X["classify · extract"] --> R["render<br/>git · state"]
   end
-  W --> P
-  CC --> P
-  MINE --> P
-  P --> X --> R
+  AD --> E --> CORE
 ```
 
 There is exactly one contract between adapters and the core — **7 neutral events**:

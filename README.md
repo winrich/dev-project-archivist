@@ -103,14 +103,10 @@ python .../archiver.py run --target "D:\我的归档"
 
 ```mermaid
 flowchart LR
-  A["本机会话数据<br/>~/.workbuddy · ~/.claude"] --> B["Adapter<br/>归一为 7 种中立事件"]
-  B --> C["SessionParser<br/>需求 · 写盘 · 决策 · 报错"]
-  C --> D["判定<br/>代码项目 / 文档任务"]
-  D --> E["提取源码<br/>分级剔除构建产物"]
-  E --> F["渲染<br/>README · 总索引 · 独立仓库"]
-  F --> G[("state.json<br/>指纹库")]
-  G -. 增量比对 .-> B
+  A["本机会话<br/>~/.workbuddy"] --> B["Adapter<br/>归一事件"] --> C["解析 · 判定"] --> D["提取源码<br/>剔噪声"] --> E["渲染 · 建仓"] --> G[("指纹库<br/>下次增量")]
 ```
+
+「指纹库」记录工作区 / 文件 / 内容三级哈希，下次运行先比对再决定是否重新解析，这就是「稳定期不调模型」的原因。
 
 一句话版本：
 
@@ -129,19 +125,18 @@ flowchart LR
 ```mermaid
 flowchart TB
   subgraph AD["adapters/ · 平台相关 · 薄"]
+    direction LR
     W["workbuddy.py"]
     CC["claude_code.py"]
     MINE["你的平台.py"]
+    W ~~~ CC ~~~ MINE
   end
+  E{{"7 种中立事件"}}
   subgraph CORE["archiver.py · 平台无关 · 厚"]
-    P["SessionParser<br/>消费事件流"]
-    X["判定 · 提取 · 复制"]
-    R["渲染 · git · 增量状态机"]
+    direction TB
+    P["SessionParser"] --> X["判定 · 提取"] --> R["渲染 · git · 增量"]
   end
-  W --> P
-  CC --> P
-  MINE --> P
-  P --> X --> R
+  AD --> E --> CORE
 ```
 
 适配器与主程序之间只有一份契约——**7 种中立事件**：
