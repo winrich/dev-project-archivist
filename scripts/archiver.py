@@ -1987,7 +1987,9 @@ def run_scan(target: Path, dry_run=False, limit=0, only="", force=False,
     idx = build_index(adapters)
     all_ids = idx.ids()
     n_transcript = sum(1 for sid in all_ids if idx.transcript(sid))
-    log(f"[1/5] 会话索引：{len(all_ids)} 个会话，{n_transcript} 份转录")
+    # 阶段编号就是本函数真实的三段：索引 / 归并 / 归档（末尾那次统计属于第三段）。
+    # 以前写成 1/5、2/5 再跳到 5/5，中间两段并不存在——这类编号写进 README 会被读者当成截断。
+    log(f"[1/3] 会话索引：{len(all_ids)} 个会话，{n_transcript} 份转录")
 
     # 供 --only 同时匹配归档目录名（state 尚未加载，先轻量读一次）
     _dir_map = {}
@@ -1997,7 +1999,7 @@ def run_scan(target: Path, dry_run=False, limit=0, only="", force=False,
     except Exception:
         pass
     projects = collect_projects(idx, min_code, only=only, limit=limit, dir_map=_dir_map)
-    log(f"[2/5] 归并完成：{len(projects)} 个项目单元")
+    log(f"[2/3] 归并完成：{len(projects)} 个项目单元")
 
     if dry_run:
         if explain is not None:
@@ -2212,7 +2214,7 @@ def run_scan(target: Path, dry_run=False, limit=0, only="", force=False,
                  json.dumps({"pending": pending, "generated_at": iso(now_ts())},
                             ensure_ascii=False, indent=2))
     state.save()
-    log(f"[5/5] 扫描完成：更新 {len(touched)} / 跳过 {skipped} / 待归纳 {len(pending)}，"
+    log(f"[3/3] 扫描完成：更新 {len(touched)} / 跳过 {skipped} / 待归纳 {len(pending)}，"
         f"耗时 {now_ts() - t0:.1f}s")
     return {"added": added, "updated": updated, "removed": newly_missing,
             "pending": pending, "skipped": skipped}

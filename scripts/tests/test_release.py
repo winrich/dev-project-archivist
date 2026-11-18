@@ -61,5 +61,33 @@ class TestVersionConsistency(unittest.TestCase):
         self.assertRegex(archiver.__version__, r"^\d+\.\d+\.\d+$")
 
 
+class TestReadmeSamples(unittest.TestCase):
+    """README 里贴的输出示例，必须还能在代码里找到出处。
+
+    阶段编号曾经写成 `1/5 → 2/5 → 5/5`，中间两段并不存在。这种编号一旦贴进 README，
+    读者只会当成「输出被截断了」，而不会想到是代码写错。这里把示例里每个
+    `[i/n] 阶段名` 拿去 archiver.py 里对一遍：对不上，就说明示例比代码旧（或改名忘了改文档）。
+
+    只查这一条，不查具体数字：数字是虚构的，**结构**必须是真的。
+    """
+
+    STAGE = re.compile(r"\[(\d+)/(\d+)\] (会话索引|归并完成|扫描完成)")
+
+    def _code_stages(self):
+        code = (ROOT / "scripts" / "archiver.py").read_text(encoding="utf-8")
+        return set(self.STAGE.findall(code))
+
+    def test_stage_numbering_matches_code(self):
+        real = self._code_stages()
+        self.assertTrue(real, "archiver.py 里找不到阶段编号（改了日志格式？）")
+        for name in ("README.md", "README.en.md"):
+            doc = (ROOT / name).read_text(encoding="utf-8")
+            shown = set(self.STAGE.findall(doc))
+            self.assertTrue(shown, f"{name} 里找不到阶段示例")
+            stale = shown - real
+            self.assertEqual(stale, set(),
+                             f"{name} 的阶段编号在代码里不存在：{sorted(stale)}")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

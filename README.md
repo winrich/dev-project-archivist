@@ -78,37 +78,57 @@ AI 让写软件变简单了，但**做出来的东西散在对话里**，于是�
 
 ## 🧠 30 秒看懂
 
-命令分两组，别把两组的频率搞混：**`scan` / `render` 一个月跑几次，`find` / `stats` 天天用。**
+命令分三组，别把频率搞混：**`scan` / `run` 一个月跑几次，`find` / `stats` / `report` / `restore` 天天用，`sync` 想起来才跑。**
 
-**第一次用时（一次性）**
+每条命令后面都跟着它跑出来的样子。`…` 是省略的行，数字是虚构的，格式与对齐由真实打印代码生成。
+
+### 第一次：先看它怎么分类，再落盘
+
+**① 只分类，不写任何文件**
 
 ```bash
-# 1. 先看分类，不写任何文件 —— 首次务必先跑它
 python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py scan --dry-run
+```
 
-# 2. 确认分类无误，正式归档（scan + render）
+```text
+[1/3] 会话索引：214 个会话，198 份转录
+[2/3] 归并完成：8 个项目单元
+
+日期        类型      语言              码   档  文件  项目
+---------------------------------------------------------------------------------------------------
+2026-10-20  代码项目  C#               298   14   312  BatchRenamer batch-renamer
+2026-10-22  代码项目  Python            88    8    96  order-sync order-sync
+2026-10-25  代码项目  Python            61    10    71  报表导出器 report-export
+2026-10-27  混合产物  Python            44    14    58  InvoiceParser invoice-parser
+2026-11-04  代码项目  TypeScript        15    3    18  CDN cdn-tools
+2026-11-06  文档任务  —                  0   12    12  some-plugin some-plugin
+…
+---------------------------------------------------------------------------------------------------
+小计：代码项目 5 / 文档任务 2 / 混合产物 1 / 空壳 0
+```
+
+一张表回答两个问题：扫到哪些项目、各自判成了什么（`码` = 源码文件数，`档` = 文档数）。**首次务必先跑它**——判定看的是工作区路径与文件构成，猜错的代价是归档里多出一堆垃圾目录。
+
+**② 分类对了，正式落盘**
+
+```bash
 python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py run
 ```
 
-**之后每天用（都只读，不写文件）**
-
-```bash
-# 找东西：项目名 / 文件名 / 指令原文，多个词全部命中
-python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py find "批处理 转换"
-
-# 看这周干了多少：对话 / 项目 / 改动文件 / token
-python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py stats --days 7
-
-# 想给同事看，或想截图发人（单文件 HTML）
-python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py report --days 30 --open
-
-# 回到上周三归档里的样子（先预览，加 --write 才落盘）
-python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py restore --date 2026-11-14
+```text
+[1/3] 会话索引：214 个会话，198 份转录
+[2/3] 归并完成：8 个项目单元
+  [1/8] = 无变化 BatchRenamer
+  [2/8] + 2026-10-22_order-sync  (源码 96 个 / 1.2 MB，文档 1 个，剔除 24)
+  [3/8] + 2026-10-25_报表导出器  (源码 71 个 / 941.4 KB，文档 3 个，剔除 41)
+  …
+[3/3] 扫描完成：更新 4 / 跳过 4 / 待归纳 2，耗时 12.4s
+[render] README 更新 4 个，索引项目 8 个
 ```
 
-第一条只打印一张分类表：扫到多少项目单元、哪些判为代码项目、哪些是纯文档任务。**首次务必先跑它**，确认分类符合预期再落盘。
+`run` = 采集 + 渲染。`= 无变化` 是增量在生效（三级指纹没变就不重解析），`+` 是这次写了盘；括号里是源码份数、体积、剔除项。跑完打开归档目录的 `INDEX.md`，每个项目都在里面。
 
-第二条 `run` = 采集 + 渲染。完成后打开归档目录的 `INDEX.md`。默认输出到 `~/Workbuddy项目归档`，改位置有两种方式：
+默认输出到 `~/Workbuddy项目归档`，改位置有两种方式：
 
 ```bash
 # 命令行指定
@@ -118,69 +138,34 @@ python .../archiver.py run --target "D:\我的归档"
 [Environment]::SetEnvironmentVariable("ARCHIVER_TARGET", "D:\我的归档", "User")
 ```
 
----
+### 之后每天：四个只读命令
 
-## 👀 长什么样
+**找东西**
 
-先看产物，再决定要不要往下读。
-
-### 账本页：`report`
-
-<p align="center">
-  <img src="docs/img/report-demo.png" alt="report 生成的单文件 HTML：四张总览卡、日历热力图、每日对话量、按对话量排序的项目卡" width="820">
-</p>
-
-一份自包含的 HTML：双击就开，不发网络请求、不加载字体，能直接发给别人。四张总览卡（对话 / 项目 / 改动文件 / token）、日历热力图、每日对话量柱状图、按对话量排的项目卡。
-
-**能分享，和敢分享，是两件事**：页面里没有工作区路径，没有指令原文，唯一的外链是页脚那几个字。
-
-> 这张图来自 [`docs/sample/report-demo.html`](docs/sample/report-demo.html)，由 [`docs/sample/build_sample.py`](docs/sample/build_sample.py)
-> 喂**虚构数据**给**同一个渲染函数**生成——项目名和数字都是编的，版式和你自己跑出来的那份一致。
-> 改了样式，样例跟着变，不会漂。
-
-### 终端里
-
-四段都是真实输出格式，数字同为虚构。
-
-**首次：先看分类，不写任何文件**
-
-```text
-$ python .../archiver.py scan --dry-run
-[1/5] 会话索引：214 个会话，198 份转录
-[2/5] 归并完成：23 个项目单元
-
-日期        类型      语言              码   档  文件  项目
----------------------------------------------------------------------------------------------------
-2026-10-20  代码项目  C#               298   14   312  BatchRenamer batch-renamer
-2026-10-22  代码项目  Python            88    8    96  order-sync order-sync
-2026-10-25  代码项目  Python            61   10    71  报表导出器 report-export
-2026-10-27  混合产物  Python            44   14    58  InvoiceParser invoice-parser
-2026-11-04  代码项目  TypeScript        15    3    18  CDN cdn-tools
-2026-11-06  文档任务  —                  0   12    12  some-plugin some-plugin
----------------------------------------------------------------------------------------------------
-小计：代码项目 12 / 文档任务 8 / 混合产物 3 / 空壳 0
+```bash
+python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py find "批处理 PowerShell"
 ```
 
-**每天：找东西**
-
 ```text
-$ python .../archiver.py find "批处理 PowerShell"
-
-2 条命中 · 用时 0.19s
+3 条命中 · 用时 0.21s
 
 InvoiceParser  ·  2026-11-12 → 2026-11-15  ·  评分 24
-  工作区  D:/code/invoice-parser
+  工作区  D:/code/InvoiceParser
   [指令] 2026-11-12 21:04  写个批处理把 build.bat 转成 ps1，顺便带上参数
   [文件] source/tools/convert.ps1
 
   → 直接回场：archiver.py find "批处理 PowerShell" --open
 ```
 
-**每周：这周干了多少**
+项目名、文件名、指令原文一起搜，多个词**全部命中**才计入；`--open` 直接打开第一条命中的原对话。只读，不写任何文件。
+
+**这周干了多少**
+
+```bash
+python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py stats --days 7
+```
 
 ```text
-$ python .../archiver.py stats --days 7
-
   最近 7 天 · 2026-11-12 → 2026-11-18
 
   对话 60 · 会话 19 · 项目 5 · 改动文件 143（写 96 / 改 47）
@@ -196,30 +181,83 @@ $ python .../archiver.py stats --days 7
   11-14          12      3     28     1.0M
   11-15          16      3     38     1.4M
   11-16           6      2     14   510.0k
-  11-17          21      4     50     1.8M
+  11-17          21      4     50     1.7M
   11-18           3      1      8   260.0k
 
   最活跃项目
-      21 对话 ·  50 文件 ·    1.8M tok   BatchRenamer
+      21 对话 ·  50 文件 ·    1.7M tok   BatchRenamer
       18 对话 ·  41 文件 ·    1.5M tok   order-sync
       11 对话 ·  33 文件 ·  940.0k tok   报表导出器
 
   空白天    11-13（没有会话）
 ```
 
-**备份：推之前先看清楚**
+不要求先跑过 `scan`——它只读本机已有的转录，新用户第一天就有数。成本那栏永远写「不估算」：模型归属常是 `auto`，拿默认单价顶替等于编数字。
+
+**想给同事看，或者截图发人**
+
+```bash
+python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py report --days 30 --open
+```
 
 ```text
-$ python .../archiver.py sync
+已写入 C:/Users/me/Workbuddy项目归档/report/report-2026-10-20_2026-11-18.html
+  30 天 · 8 个项目 · 211 条对话 · 22.3M token
+  报告不含工作区路径与指令原文，可直接分享
+```
 
+单文件 HTML，双击就开，不发网络请求、不加载字体。页面本身长什么样，见下面「👀 长什么样」。
+
+**回到上周三归档里的样子**
+
+```bash
+python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py restore --date 2026-11-14
+```
+
+```text
+  归档快照 2026-11-14（当天 23:59:59 之前最后一次提交）
+  预览，未写任何文件
+
+  项目                          快照时间             文件      体积
+  ------------------------------------------------------------------
+  2026-10-20_BatchRenamer       11-14 22:41            47    1.2 MB
+  2026-10-22_order-sync         11-14 19:03            38  860.0 KB
+  2026-10-25_报表导出器         11-14 16:27            21  420.0 KB
+  2026-10-27_InvoiceParser      11-14 11:52            13  210.0 KB
+  … 另 4 个
+
+  小计 8 个项目 · 213 个文件 · 4.6 MB
+
+    2026-10-20_BatchRenamer      4b7d2c19  批处理转换：把 build.bat 转成 ps1 等 3 项
+    2026-10-22_order-sync        c81f5a3e  订单对账：先跑通一天再谈批量 等 2 项
+    2026-10-25_报表导出器             2e9a06b7  导出加一列毛利率 等 4 项
+    2026-10-27_InvoiceParser     d1c4f8a2  发票号从附件名里取，取不到就留空 等 2 项
+    … 另 4 个，--json 看全部
+
+  这只是预览。加 --write 才会展开成副本（不会改动归档本身）：
+    restore --date 2026-11-14 --write
+```
+
+默认只预览：恢复动辄几百 MB，先看清「要拿回哪一版、多少文件」再决定。`--write` 展开到 `<归档目录>/_restore/2026-11-14/`，归档本身一个字节都不动；恢复不了的项目会单独列出来，并写明原因（仓库没提交 / 那天之前还没归档过）。
+
+### 想起来才跑：把归档备到自己的仓库
+
+```bash
+python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py sync          # 预览
+python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py sync --push   # 真推
+```
+
+```text
   归档仓库 8 个 · 配了远端 6 个 · 有未提交改动 3 个 · 待推送 5 个提交
 
   仓库                      分支     远端                           待提交  待推送
   ------------------------------------------------------------------------------
-  BatchRenamer              main     github.com/me/batch-renamer         2      +2
-  order-sync                main     github.com/me/order-sync            -       -
-  报表导出器                main     github.com/me/report-export         1      +3
-  InvoiceParser             main     github.com/me/invoice-parser        -      +2
+  2026-10-20_BatchRenamer   main     github.com/me/batch-renamer         2      +2
+  2026-10-22_order-sync     main     github.com/me/order-sync            -       -
+  2026-10-25_报表导出器     main     github.com/me/report-export         1      +2
+  2026-10-27_InvoiceParser  main     github.com/me/invoice-parser        -      +1
+  2026-10-29_reader-private main     github.com/me/reader-private        -       -
+  2026-11-01_task-board     main     github.com/me/task-board            -       -
 
   2 个仓库没配远端（不会推送）。要备份到自己的仓库，在归档目录里各执行一次：
       git remote add origin <你的仓库地址>
@@ -227,6 +265,28 @@ $ python .../archiver.py sync
 
   这是预览，没有提交也没有推送。加 --push 才执行。
 ```
+
+只推**自己配了远端**的仓库（不猜地址、不自动建远端）、**永不 force**、不进 `run`（定时任务不该依赖网络）。
+
+---
+
+## 👀 长什么样
+
+先看产物，再决定要不要往下读。`report` 生成的账本页长这样：
+
+<p align="center">
+  <img src="docs/img/report-demo.png" alt="report 生成的单文件 HTML：四张总览卡、日历热力图、每日对话量、按对话量排序的项目卡" width="820">
+</p>
+
+一份自包含的 HTML：双击就开，不发网络请求、不加载字体，能直接发给别人。四张总览卡（对话 / 项目 / 改动文件 / token）、日历热力图、每日对话量柱状图、按对话量排的项目卡。
+
+**能分享，和敢分享，是两件事**：页面里没有工作区路径，没有指令原文，唯一的外链是页脚那几个字。
+
+> 这张图来自 [`docs/sample/report-demo.html`](docs/sample/report-demo.html)，由 [`docs/sample/build_sample.py`](docs/sample/build_sample.py)
+> 喂**虚构数据**给**同一个渲染函数**生成——项目名和数字都是编的，版式和你自己跑出来的那份一致。
+> 改了样式，样例跟着变，不会漂。
+
+其余命令的输出（分类表、命中列表、账本数字、恢复预览）都在上面「🧠 30 秒看懂」里——每条命令后面都跟着它跑出来的样子。
 
 ---
 
@@ -441,6 +501,8 @@ python .../archiver.py run
 
 ## 📚 命令一览
 
+常用的七个命令连同它们的输出在上面「🧠 30 秒看懂」里；这里是完整参数。
+
 | 命令 | 作用 |
 |---|---|
 | `scan` | 采集/提取/复制源码，写证据包与待归纳清单 |
@@ -552,7 +614,7 @@ python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py stats --day
 ```
 
 ```text
-  最近 7 天 · 2026-11-13 → 2026-11-19
+  最近 7 天 · 2026-11-06 → 2026-11-12
 
   对话 327 · 会话 6 · 项目 6 · 改动文件 172（写 155 / 改 17）
   Token 输入 936.0M（缓存命中 99%）· 输出 5.3M · 合计 941.4M
@@ -562,8 +624,8 @@ python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py stats --day
 
   日期         对话   项目   文件    token
   ----------------------------------------
-  11-13           6      1     10    20.7M
-  11-14          82      2     87   421.3M
+  11-06           6      1     10    20.7M
+  11-07          82      2     87   421.3M
   ...
 
   最活跃项目
@@ -924,7 +986,7 @@ dev-project-archivist/
 │   │   ├── workbuddy.py            # WorkBuddy 会话索引与解析
 │   │   ├── claude_code.py          # Claude Code JSONL 解析
 │   │   └── __init__.py             # 注册表与 --source 选择
-│   └── tests/                      # 227 例，全部可离线跑
+│   └── tests/                      # 228 例，全部可离线跑
 │       ├── test_adapters.py        # 适配器单元测试
 │       ├── test_daylog.py          # 按天聚合（不丢不重）
 │       ├── test_naming.py          # 命名证据链与标题清洗
@@ -934,7 +996,7 @@ dev-project-archivist/
 │       ├── test_report.py          # HTML 报告结构与脱敏
 │       ├── test_restore.py         # 按日恢复语义（临时 git 仓库）
 │       ├── test_sync.py            # 备份推送：不 force、未配远端不碰
-│       ├── test_release.py         # 版本号三处一致
+│       ├── test_release.py         # 版本号三处一致、README 示例与代码同源
 │       └── test_public_content.py  # 公开内容防泄漏：竞品名 / 带用户名的路径
 ├── references/
 │   ├── automation-prompt.md        # 夜间定时任务的可粘贴提示词
@@ -957,7 +1019,7 @@ dev-project-archivist/
 提交前请跑一遍：
 
 ```bash
-python -m unittest discover -s scripts/tests   # 全量，227 例，离线可跑
+python -m unittest discover -s scripts/tests   # 全量，228 例，离线可跑
 python scripts/archiver.py scan --dry-run
 ```
 

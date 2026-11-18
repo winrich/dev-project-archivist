@@ -78,38 +78,63 @@ This tool contains no project data. It only turns **local sessions** into a sour
 
 ## 🧠 Understand it in 30 seconds
 
-Commands come in two groups — don't mix up their frequency:
-**`scan` / `render` run a few times a month; `find` / `stats` are for every day.**
+Commands come in three groups — don't mix up their frequency:
+**`scan` / `run` run a few times a month; `find` / `stats` / `report` / `restore` are daily; `sync` when you think of it.**
 
-**First time (one-off)**
+Every command below is followed by what it actually prints. `…` marks elided lines; numbers are invented; the columns
+are padded by the real print code. (CLI messages are in Chinese for now.)
+
+### First time: check the classification, then write
+
+**1. Classify only — writes nothing**
 
 ```bash
-# 1. Inspect the classification — writes nothing. Run this first.
 python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py scan --dry-run
+```
 
-# 2. Happy with the table? Archive for real (scan + render)
+```text
+[1/3] 会话索引：214 个会话，198 份转录
+[2/3] 归并完成：8 个项目单元
+
+日期        类型      语言              码   档  文件  项目
+---------------------------------------------------------------------------------------------------
+2026-10-20  代码项目  C#               298   14   312  BatchRenamer batch-renamer
+2026-10-22  代码项目  Python            88    8    96  order-sync order-sync
+2026-10-25  代码项目  Python            61    10    71  报表导出器 report-export
+2026-10-27  混合产物  Python            44    14    58  InvoiceParser invoice-parser
+2026-11-04  代码项目  TypeScript        15    3    18  CDN cdn-tools
+2026-11-06  文档任务  —                  0   12    12  some-plugin some-plugin
+…
+---------------------------------------------------------------------------------------------------
+小计：代码项目 5 / 文档任务 2 / 混合产物 1 / 空壳 0
+```
+
+One table answers two questions: which project units were found, and what each was judged to be (`码` = source files,
+`档` = documents). **Run it first** — the judgement looks at workspace paths and file layout, and a wrong call means
+junk directories in your archive.
+
+**2. Classification looks right? Archive for real**
+
+```bash
 python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py run
 ```
 
-**Everyday use (read-only, writes nothing)**
-
-```bash
-# Find things: project names / file names / prompt text, all words must match
-python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py find "batch convert"
-
-# How much did this week cost you: prompts / projects / files / tokens
-python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py stats --days 7
-
-# Something to show a colleague (single-file HTML)
-python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py report --days 30 --open
-
-# What the archive looked like last Wednesday (preview first, --write to expand)
-python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py restore --date 2026-11-14
+```text
+[1/3] 会话索引：214 个会话，198 份转录
+[2/3] 归并完成：8 个项目单元
+  [1/8] = 无变化 BatchRenamer
+  [2/8] + 2026-10-22_order-sync  (源码 96 个 / 1.2 MB，文档 1 个，剔除 24)
+  [3/8] + 2026-10-25_报表导出器  (源码 71 个 / 941.4 KB，文档 3 个，剔除 41)
+  …
+[3/3] 扫描完成：更新 4 / 跳过 4 / 待归纳 2，耗时 12.4s
+[render] README 更新 4 个，索引项目 8 个
 ```
 
-The first command only prints a table: how many project units were found, which are code projects, which are pure document tasks. **Run it first** and confirm the classification before anything is written.
+`run` = collect + render. `= 无变化` means the fingerprint layer skipped it (nothing changed, so nothing was
+re-parsed); `+` means it was written this run, followed by copied files, size and exclusions. When it finishes, open
+`INDEX.md` in the archive — every project is in there.
 
-The second, `run` = collect + render. When it finishes, open `INDEX.md` in the archive. Output defaults to `~/Workbuddy项目归档`; change it in one of two ways:
+Output defaults to `~/Workbuddy项目归档`; change it in one of two ways:
 
 ```bash
 # Per command
@@ -119,55 +144,35 @@ python .../archiver.py run --target "D:\my-archive"
 [Environment]::SetEnvironmentVariable("ARCHIVER_TARGET", "D:\my-archive", "User")
 ```
 
----
+### Then, every day: four read-only commands
 
-## 👀 What it looks like
+**Find things**
 
-Look at the output first, decide later whether to read on.
-
-### The ledger page: `report`
-
-<p align="center">
-  <img src="docs/img/report-demo.png" alt="Single-file HTML report: four summary cards, calendar heatmap, daily bar chart, projects ranked by prompt count" width="820">
-</p>
-
-One self-contained HTML file: double-click and it opens — no network requests, no web fonts, safe to hand to someone else. Four summary cards (prompts / projects / changed files / tokens), a calendar heatmap, a daily bar chart, and projects ranked by prompt count.
-
-**Shareable and safe-to-share are two different things**: no workspace paths and no prompt text in the page — the only external link is a few words in the footer.
-
-> The image comes from [`docs/sample/report-demo.html`](docs/sample/report-demo.html), generated by
-> [`docs/sample/build_sample.py`](docs/sample/build_sample.py) — **invented data** fed to the **same renderer**
-> you run. Names and numbers are made up; the layout is exactly what you get. Change the styles and the sample
-> follows, so it never drifts.
-
-### In the terminal
-
-Real output formats, invented numbers. (CLI messages are in Chinese for now.)
-
-**Once: classify first, writes nothing**
-
-```text
-$ python .../archiver.py scan --dry-run
-[1/5] 会话索引：214 个会话，198 份转录
-[2/5] 归并完成：23 个项目单元
-
-日期        类型      语言              码   档  文件  项目
----------------------------------------------------------------------------------------------------
-2026-10-20  代码项目  C#               298   14   312  BatchRenamer batch-renamer
-2026-10-22  代码项目  Python            88    8    96  order-sync order-sync
-2026-10-25  代码项目  Python            61   10    71  报表导出器 report-export
-2026-10-27  混合产物  Python            44   14    58  InvoiceParser invoice-parser
-2026-11-04  代码项目  TypeScript        15    3    18  CDN cdn-tools
-2026-11-06  文档任务  —                  0   12    12  some-plugin some-plugin
----------------------------------------------------------------------------------------------------
-小计：代码项目 12 / 文档任务 8 / 混合产物 3 / 空壳 0
+```bash
+python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py find "批处理 PowerShell"
 ```
 
-**Every week: how much did this week cost you**
+```text
+3 条命中 · 用时 0.21s
+
+InvoiceParser  ·  2026-11-12 → 2026-11-15  ·  评分 24
+  工作区  D:/code/InvoiceParser
+  [指令] 2026-11-12 21:04  写个批处理把 build.bat 转成 ps1，顺便带上参数
+  [文件] source/tools/convert.ps1
+
+  → 直接回场：archiver.py find "批处理 PowerShell" --open
+```
+
+Project names, file names and prompt text are searched together; with multiple words, **all must match**. `--open`
+jumps straight back into the top hit's original conversation. Read-only: no lock, no files written.
+
+**How much did this week cost you**
+
+```bash
+python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py stats --days 7
+```
 
 ```text
-$ python .../archiver.py stats --days 7
-
   最近 7 天 · 2026-11-12 → 2026-11-18
 
   对话 60 · 会话 19 · 项目 5 · 改动文件 143（写 96 / 改 47）
@@ -183,19 +188,119 @@ $ python .../archiver.py stats --days 7
   11-14          12      3     28     1.0M
   11-15          16      3     38     1.4M
   11-16           6      2     14   510.0k
-  11-17          21      4     50     1.8M
+  11-17          21      4     50     1.7M
   11-18           3      1      8   260.0k
 
   最活跃项目
-      21 对话 ·  50 文件 ·    1.8M tok   BatchRenamer
+      21 对话 ·  50 文件 ·    1.7M tok   BatchRenamer
       18 对话 ·  41 文件 ·    1.5M tok   order-sync
       11 对话 ·  33 文件 ·  940.0k tok   报表导出器
 
   空白天    11-13（没有会话）
 ```
 
-**Backup: look before you push** — `sync` prints a per-repo table (branch, remote, unpushed commits) and refuses
-to touch repos without a remote. Full example in the Chinese README.
+No `scan` required first — it reads transcripts already on disk, so day one has numbers. The cost line always reads
+"not estimated": the model field is often `auto`, and multiplying by a default price would be inventing data.
+
+**Something to show a colleague**
+
+```bash
+python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py report --days 30 --open
+```
+
+```text
+已写入 C:/Users/me/Workbuddy项目归档/report/report-2026-10-20_2026-11-18.html
+  30 天 · 8 个项目 · 211 条对话 · 22.3M token
+  报告不含工作区路径与指令原文，可直接分享
+```
+
+One self-contained HTML file: double-click and it opens — no network requests, no web fonts. What the page itself
+looks like: see "👀 What it looks like" below.
+
+**What the archive looked like last Wednesday**
+
+```bash
+python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py restore --date 2026-11-14
+```
+
+```text
+  归档快照 2026-11-14（当天 23:59:59 之前最后一次提交）
+  预览，未写任何文件
+
+  项目                          快照时间             文件      体积
+  ------------------------------------------------------------------
+  2026-10-20_BatchRenamer       11-14 22:41            47    1.2 MB
+  2026-10-22_order-sync         11-14 19:03            38  860.0 KB
+  2026-10-25_报表导出器         11-14 16:27            21  420.0 KB
+  2026-10-27_InvoiceParser      11-14 11:52            13  210.0 KB
+  … 另 4 个
+
+  小计 8 个项目 · 213 个文件 · 4.6 MB
+
+    2026-10-20_BatchRenamer      4b7d2c19  批处理转换：把 build.bat 转成 ps1 等 3 项
+    2026-10-22_order-sync        c81f5a3e  订单对账：先跑通一天再谈批量 等 2 项
+    2026-10-25_报表导出器             2e9a06b7  导出加一列毛利率 等 4 项
+    2026-10-27_InvoiceParser     d1c4f8a2  发票号从附件名里取，取不到就留空 等 2 项
+    … 另 4 个，--json 看全部
+
+  这只是预览。加 --write 才会展开成副本（不会改动归档本身）：
+    restore --date 2026-11-14 --write
+```
+
+Preview by default: a restore can be hundreds of MB, so look at "which version, how many files" before deciding.
+`--write` expands into `<archive>/_restore/2026-11-14/` and touches nothing in the archive itself. Projects that
+cannot be restored are listed separately with the reason (repo has no commits / nothing archived before that day).
+
+### When you remember to: back the archive up to your own repos
+
+```bash
+python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py sync          # preview
+python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py sync --push   # really push
+```
+
+```text
+  归档仓库 8 个 · 配了远端 6 个 · 有未提交改动 3 个 · 待推送 5 个提交
+
+  仓库                      分支     远端                           待提交  待推送
+  ------------------------------------------------------------------------------
+  2026-10-20_BatchRenamer   main     github.com/me/batch-renamer         2      +2
+  2026-10-22_order-sync     main     github.com/me/order-sync            -       -
+  2026-10-25_报表导出器     main     github.com/me/report-export         1      +2
+  2026-10-27_InvoiceParser  main     github.com/me/invoice-parser        -      +1
+  2026-10-29_reader-private main     github.com/me/reader-private        -       -
+  2026-11-01_task-board     main     github.com/me/task-board            -       -
+
+  2 个仓库没配远端（不会推送）。要备份到自己的仓库，在归档目录里各执行一次：
+      git remote add origin <你的仓库地址>
+  之后 `sync --push` 就会带上它们。
+
+  这是预览，没有提交也没有推送。加 --push 才执行。
+```
+
+It only pushes repos **that already have a remote of their own** (no guessed URLs, no auto-created remotes), **never
+forces**, and is not part of `run` (a scheduled task should not depend on the network).
+
+---
+
+## 👀 What it looks like
+
+Look at the output first, decide later whether to read on. This is what the page `report` generates looks like:
+
+<p align="center">
+  <img src="docs/img/report-demo.png" alt="Single-file HTML report: four summary cards, calendar heatmap, daily bar chart, projects ranked by prompt count" width="820">
+</p>
+
+One self-contained HTML file: double-click and it opens — no network requests, no web fonts, safe to hand to someone else. Four summary cards (prompts / projects / changed files / tokens), a calendar heatmap, a daily bar chart, and projects ranked by prompt count.
+
+**Shareable and safe-to-share are two different things**: no workspace paths and no prompt text in the page — the only external link is a few words in the footer.
+
+> The image comes from [`docs/sample/report-demo.html`](docs/sample/report-demo.html), generated by
+> [`docs/sample/build_sample.py`](docs/sample/build_sample.py) — **invented data** fed to the **same renderer**
+> you run. Names and numbers are made up; the layout is exactly what you get. Change the styles and the sample
+> follows, so it never drifts.
+
+Terminal output for every command — classification table, search hits, ledger numbers, restore preview — is in
+"🧠 Understand it in 30 seconds" above, right under each command.
 
 ---
 
@@ -410,6 +515,9 @@ Regardless of platform, every project has `_meta/conversations.md` — all user 
 
 ## 📚 Command reference
 
+The seven commands you actually use, with their output, are in "🧠 Understand it in 30 seconds" above; this is the
+full flag list.
+
 | Command | What it does |
 |---|---|
 | `scan` | Collect / extract / copy source, write the evidence pack and the pending-summarisation list |
@@ -597,7 +705,7 @@ dev-project-archivist/
 │   │   ├── workbuddy.py            # WorkBuddy session index and parser
 │   │   ├── claude_code.py          # Claude Code JSONL parser
 │   │   └── __init__.py             # Registry and --source selection
-│   └── tests/                      # 227 tests, all runnable offline
+│   └── tests/                      # 228 tests, all runnable offline
 │       ├── test_adapters.py        # Adapter unit tests
 │       ├── test_daylog.py          # Per-day aggregation (nothing lost or double counted)
 │       ├── test_naming.py          # Name evidence chain and title cleanup
@@ -607,7 +715,7 @@ dev-project-archivist/
 │       ├── test_report.py          # HTML report structure and redaction
 │       ├── test_restore.py         # Restore semantics (throwaway git repos)
 │       ├── test_sync.py            # Push safety: never force, no remote = untouched
-│       ├── test_release.py         # Version number consistent in all three places
+│       ├── test_release.py         # Version triple, and README samples vs code
 │       └── test_public_content.py  # Leak guard: competitor name / home paths with a username
 ├── references/
 │   ├── automation-prompt.md        # Copy-pasteable prompt for the nightly job
@@ -630,7 +738,7 @@ Issues and PRs are welcome. Especially useful:
 Before submitting, please run:
 
 ```bash
-python -m unittest discover -s scripts/tests   # full suite, 227 tests, offline
+python -m unittest discover -s scripts/tests   # full suite, 228 tests, offline
 python scripts/archiver.py scan --dry-run
 ```
 
