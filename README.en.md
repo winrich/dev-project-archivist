@@ -347,6 +347,9 @@ Regardless of platform, every project has `_meta/conversations.md` — all user 
 | `pending` | List projects whose evidence changed and need re-summarising |
 | `status` | Last run time, lost projects, projects missing summaries, `.git` size check |
 | `git-clean` | Rebuild the repositories this tool created, purging large objects from history |
+| `sync` | **Inspect repo sync state**: remote / uncommitted / unpushed. Read-only |
+| `sync --push` | Commit pending changes and push to each repo's own remote (no remote = skip, never force) |
+| `sync --only KEYWORD` | Limit to repos whose name matches; `--json` for machine-readable output |
 | `find KEYWORD` | **Cross-project search**: names / file names / prompt text. All words must match. Read-only |
 | `find KEYWORD --open` | Open the original conversation of the top hit |
 | `find KEYWORD --json` | Machine-readable output (score + snippets) |
@@ -446,6 +449,43 @@ Check `excluded.external` in `manifest.json` and the large files under `source/`
 
 **The git repository is suspiciously large**
 After changing exclusion rules, old large blobs may remain in history: `python .../archiver.py git-clean`.
+
+**`sync --push` says the remote has commits you don't have**
+Someone pushed elsewhere and you are behind. This is the one case it refuses to handle — forcing would wipe their commits. Run `git pull --rebase` in that repo, resolve, then `sync --push` again.
+
+---
+
+## 🔁 Backing up to your own repos: `sync`
+
+Commits stay **on this machine only**. If the disk dies, the ledger dies with the source. `sync` closes that gap:
+it pushes to remotes **you configured yourself**.
+
+```bash
+python .../archiver.py sync              # inspect: which repos have a remote, pending changes, unpushed commits
+python .../archiver.py sync --push       # commit pending changes, then push
+python .../archiver.py sync --only KEYWORD  # limit to matching repos
+python .../archiver.py sync --json       # machine-readable, for scheduled scripts
+```
+
+Three constraints (better to do less than to overstep):
+
+| Constraint | Why |
+|---|---|
+| Only repos **with a remote** are pushed | The archiver does not decide where your backup lives, and never guesses a URL. No remote = skip, with instructions — it will not create one for you |
+| **Never force** | If the remote has commits you lack, it reports and stops. The archive holds source code; one force push can erase someone else's work |
+| No invented messages | A manual sync has no new prompts to draw from, so it says `sync: 手动同步（N 项变化）` |
+
+**Why `run` doesn't push**: the nightly job should not depend on the network. A dropped connection or expired
+credential would turn a successful archive run into a failing scheduled task.
+
+Set a remote once per repo; `sync --push` picks it up from then on:
+
+```bash
+cd <archive>/<some project>
+git remote add origin <your-remote-url>
+```
+
+The first push uses `git push -u`, so the upstream branch is created for you.
 
 ---
 

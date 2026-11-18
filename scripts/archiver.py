@@ -2837,6 +2837,19 @@ def cmd_status(target: Path):
         for sz, nm in big[:5]:
             log(f"  {human_size(sz):>10}  {nm}")
         log("  在对应归档目录跑 `git gc --prune=now`，或用 `git-clean` 重建仓库")
+
+    # 远端体检：只读 .git/config（不调 git 进程），27 个仓库也就几毫秒。
+    # 这里只报「配了几个」，具体待推送多少交给 `sync`——status 要快，sync 可以慢。
+    n_remote = 0
+    for v in arch:
+        d = v.get("dir", "")
+        if not d:
+            continue
+        adir = target / d
+        if (adir / ".git").exists() and git_remote_names(adir):
+            n_remote += 1
+    if n_remote:
+        log(f"已配远端 {n_remote} 个仓库（`sync` 看待推送，`sync --push` 执行）")
     return 0
 
 
@@ -3617,6 +3630,290 @@ def cmd_git_clean(target: Path):
         done += 1
     print(f"git 重建完成：{done} 个，跳过 {skip} 个")
     return 0
+
+
+# ================================================================ 归档仓库同步
+#
+# `run` 每天把归档写进各项目目录的本地仓库，但**提交只留在本机**：从不出门。
+# 磁盘一坏，账本跟着没。`sync` 补的就是这一步——把本地提交推到你自己配的远端。
+#
+# 三条硬约束（README / SKILL 写的是同一段话，改这里记得同步）：
+#
+#   1. **只推配了 remote 的仓库**。归档器不替你决定备份到哪儿，也不猜 URL；
+#      没配就跳过并告诉你怎么配。绝不自动建远端——那等于把源码推去一个
+#      你自己都没选过的地方。
+#   2. **永不 force**。远端有本地没有的提交（落后/分叉）时只报告，让人手动处理。
+#      归档仓库里放的是源码，强推一次就可能把别人的改动抹掉。
+#   3. **提交信息不编造**。手动同步没有新对话可依据，就老实写「手动同步（N 项变化）」，
+#      不假装成某次对话的产物。
+#
+# 为什么不是 `run` 的一部分：定时任务每天 00:05 跑，它不该依赖网络。
+# 推送失败（断网、凭据过期）会把一次成功的归档变成一次报错的定时任务。
+
+
+def git_remote_names(adir: Path) -> list:
+    """仓库配了哪些远端 [(名字, url)]，按名字排序，origin 优先。
+
+    直接读 `.git/config` 而不调 git：`status` 要对 27 个仓库各查一次，
+    文本解析是微秒级，起 27 个进程是秒级。
+    """
+    cfg = adir / ".git" / "config"
+    try:
+        text = cfg.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    out, name, url = [], "", ""
+    for raw in text.splitlines():
+        line = raw.strip()
+        m = re.match(r'\[remote\s+"(.+)"\]', line)
+        if m:
+            if name and url:
+                out.append((name, url))
+            name, url = m.group(1), ""
+            continue
+        if line.startswith("url") and "=" in line:
+            url = line.split("=", 1)[1].strip()
+    if name and url:
+        out.append((name, url))
+    out.sort(key=lambda x: (x[0] != "origin", x[0].lower()))
+    return out
+
+
+def repo_sync_state(adir: Path) -> dict:
+    """一个归档仓库的同步状态。只读，不改任何东西。
+
+    字段：branch/remote/url/upstream/ahead/behind/pending/empty/error。
+    ahead = -1 表示「有远端但没有跟踪分支」，此时「待推送」的数量是未知而不是 0——
+    把它当 0 会让人以为已经推过了。
+    """
+    st = {"dir": adir.name, "branch": "", "remote": "", "url": "",
+          "upstream": "", "ahead": -1, "behind": 0, "pending": 0,
+          "empty": False, "error": ""}
+
+    # 远端先解析：它只是读一个配置文件，而且「配了但状态异常」和「没配」
+    # 要给完全不同的提示，不能因为后面某步失败就丢掉这个信息。
+    remotes = git_remote_names(adir)
+    if remotes:
+        st["remote"], st["url"] = remotes[0]
+
+    rc, out, _ = _git_run(adir, ["rev-parse", "--git-dir"], timeout=30)
+    if rc != 0:
+        st["error"] = "不是可用的 git 仓库"
+        return st
+    # 用 symbolic-ref 而不是 rev-parse --abbrev-ref：后者在「还没提交过」的仓库上报错，
+    # 会被误判成 detached，进而把空仓库说成「状态异常」。
+    rc, out, _ = _git_run(adir, ["symbolic-ref", "--short", "HEAD"], timeout=30)
+    branch = (out or "").strip() if rc == 0 else ""
+    if not branch:
+        st["error"] = "处于分离头指针（detached HEAD），不推送"
+        return st
+    st["branch"] = branch
+
+    rc, out, _ = _git_run(adir, ["rev-list", "-n", "1", "HEAD"], timeout=30)
+    if rc != 0 or not (out or "").strip():
+        st["empty"] = True          # git init 过但一次都没提交
+        return st
+
+    rc, out, _ = _git_run(adir, ["status", "--porcelain"], timeout=60)
+    if rc == 0:
+        st["pending"] = len([x for x in (out or "").splitlines() if x.strip()])
+
+    rc, out, _ = _git_run(adir, ["rev-parse", "--abbrev-ref", "--symbolic-full-name",
+                                 "@{u}"], timeout=30)
+    if rc == 0 and (out or "").strip():
+        st["upstream"] = (out or "").strip()
+        rc, out, _ = _git_run(adir, ["rev-list", "--count", "--left-right",
+                                     f"{st['upstream']}...HEAD"], timeout=120)
+        if rc == 0:
+            parts = (out or "").split()
+            if len(parts) == 2:
+                try:
+                    st["behind"], st["ahead"] = int(parts[0]), int(parts[1])
+                except ValueError:
+                    pass
+    elif st["remote"]:
+        st["ahead"] = -1             # 有远端但没跟踪分支：状态未知
+    return st
+
+
+def _sync_commit(adir: Path, st: dict, name: str) -> str:
+    """把未提交的改动提交掉。返回 '' 表示成功或有话要说之外的正常情况。
+
+    复用 git_init 的提交路径，保证提交体里带 ARCHIVER_TRAILER——
+    git-clean 靠它判断「这个仓库的历史是不是全由归档器产生」。
+    """
+    if not st["pending"]:
+        return ""
+    res = git_init(adir, name, note=f"手动同步（{st['pending']} 项变化）")
+    if res not in ("committed", "exists", "ok"):
+        return "提交失败（可能是索引被占用或权限不足）"
+    return ""
+
+
+def _sync_push(adir: Path, st: dict) -> dict:
+    """推送一个仓库。**不带任何 force 参数，这是设计而不是疏漏。**"""
+    res = {"dir": st["dir"], "branch": st["branch"], "remote": st["remote"],
+           "committed": st["pending"], "ok": False, "msg": ""}
+    args = ["push"]
+    if not st["upstream"]:
+        args += ["-u", st["remote"], st["branch"]]
+    rc, out, err = _git_run(adir, args, timeout=900)
+    combined = ((out or "") + "\n" + (err or "")).strip()
+    if rc == 0:
+        res["ok"] = True
+        return res
+    low = combined.lower()
+    if "non-fast-forward" in low or "fetch first" in low or "rejected" in low \
+            or "diverg" in low:
+        res["msg"] = "远端有本地没有的提交，未推送（不会 force）"
+    elif "permission denied" in low or "authentication" in low or "403" in low:
+        res["msg"] = "认证失败，检查远端凭据"
+    elif "could not read" in low or "not found" in low or "does not appear" in low:
+        res["msg"] = "远端地址不可用"
+    else:
+        last = [x for x in combined.splitlines() if x.strip()]
+        res["msg"] = (last[-1][:160] if last else "推送失败")
+    return res
+
+
+def _short_url(url: str) -> str:
+    """远端地址压成 `host/path`：屏幕上要的是「这是哪儿」，scheme 与用户名是噪声。
+
+    三种写法都见过：`https://user:token@host/a/b.git`、`git@host:a/b.git`、
+    `ssh://git@host:2222/a/b.git`（带端口）。最后一种保留端口，否则会读成 `host/2222/a/b`。
+    """
+    u = (url or "").strip()
+    u = re.sub(r"^file://", "", u, flags=re.I)
+    if re.match(r"^[A-Za-z]:[\\/]", u) or u.startswith("/"):
+        # 本地/网络路径（含 Windows 盘符）。整条路径对读者没意义，仓库名才有。
+        return "本地 " + re.split(r"[\\/]", u.rstrip("/\\"))[-1]
+    u = re.sub(r"^[A-Za-z][A-Za-z0-9+.\-]*://", "", u)   # 去掉 scheme
+    if "@" in u:
+        u = u.split("@", 1)[1]                            # 去掉用户名/口令
+    m = re.match(r"^([^/:]+):(\d+)(/.*)$", u)             # ssh 带端口
+    if m:
+        return f"{m.group(1)}:{m.group(2)}{m.group(3)}".rstrip("/")
+    if ":" in u and "/" not in u.split(":", 1)[0]:        # scp 风格 host:path
+        u = u.replace(":", "/", 1)
+    return u.rstrip("/")
+
+
+def cmd_sync(target: Path, push: bool = False, only: str = "",
+             as_json: bool = False) -> int:
+    """归档仓库的同步：看有哪些没推，或真的推上去。
+
+    默认只预览（零写入）。`--push` 才提交 + 推送，且只针对配了远端的仓库。
+    """
+    dirs = archive_dirs(target)
+    kw = (only or "").strip().lower()
+    if kw:
+        dirs = [d for d in dirs if kw in d.name.lower()]
+
+    if not dirs:
+        if as_json:
+            print(json.dumps({"repos": 0, "with_remote": 0, "rows": []},
+                             ensure_ascii=False, indent=2))
+            return 0
+        print()
+        print(f"  {target} 下没有归档仓库" + (f"匹配「{only}」" if kw else ""))
+        print("  先跑一次 `run` 建立归档" + ("，或去掉 --only" if kw else ""))
+        print()
+        return 0 if not kw else 1
+
+    rows = [repo_sync_state(d) for d in dirs]
+    with_remote = [r for r in rows if r["remote"]]
+    dirty = [r for r in rows if r["pending"]]
+    ahead = sum(max(0, r["ahead"]) for r in with_remote)
+
+    if not push:
+        if as_json:
+            print(json.dumps({"repos": len(rows), "with_remote": len(with_remote),
+                              "rows": rows}, ensure_ascii=False, indent=2))
+            return 0
+        print()
+        head = f"  归档仓库 {len(rows)} 个 · 配了远端 {len(with_remote)} 个"
+        if dirty:
+            head += f" · 有未提交改动 {len(dirty)} 个"
+        if ahead:
+            head += f" · 待推送 {ahead} 个提交"
+        print(head)
+        if with_remote:
+            print()
+            print("  " + _pad("仓库", 26) + _pad("分支", 9) + _pad("远端", 30)
+                  + _pad("待提交", 7, right=True) + _pad("待推送", 8, right=True))
+            print("  " + "-" * 78)
+            for r in with_remote:
+                cnt = "未知" if r["ahead"] < 0 else (f"+{r['ahead']}" if r["ahead"] else "-")
+                if r["behind"]:
+                    cnt += f" 落后{r['behind']}"
+                print("  " + _pad(_cut(r["dir"], 26), 26)
+                      + _pad(_cut(r["branch"], 9), 9)
+                      + _pad(_cut(_short_url(r["url"]), 30), 30)
+                      + _pad(r["pending"] or "-", 7, right=True)
+                      + _pad(cnt, 8, right=True))
+        miss = [r for r in rows if not r["remote"]]
+        if miss:
+            print()
+            print(f"  {len(miss)} 个仓库没配远端（不会推送）。要备份到自己的仓库，"
+                  f"在归档目录里各执行一次：")
+            print("      git remote add origin <你的仓库地址>")
+            print("  之后 `sync --push` 就会带上它们。")
+        errs = [r for r in rows if r["error"]]
+        if errs:
+            print()
+            for r in errs[:5]:
+                print(f"  跳过 {r['dir']}：{r['error']}")
+        print()
+        print("  这是预览，没有提交也没有推送。加 --push 才执行。")
+        print()
+        return 0
+
+    # ---- 真推送
+    todo = [r for r in with_remote if not r["error"]]
+    skipped = [r for r in rows if not r["remote"] and not r["error"]]
+    say = (lambda *a, **k: None) if as_json else print    # --json 时只吐机器可读结果
+    say()
+    say(f"  推送 {len(todo)} 个仓库（跳过 {len(skipped)} 个未配远端）")
+    say()
+    done, failed = [], []
+    # 状态不正常的（分离头指针、目录根本不是仓库）不能静默漏掉：
+    # 静默跳过会让人以为「已经推上去了」。
+    for r in rows:
+        if r["error"]:
+            failed.append({"dir": r["dir"], "msg": r["error"]})
+            say(f"  {_pad(_cut(r['dir'], 24), 24)} {r['error']}")
+    for r in todo:
+        adir = target / r["dir"]
+        if r["empty"]:
+            failed.append({"dir": r["dir"], "msg": "空仓库（还没有任何提交），跳过"})
+            say(f"  {_pad(_cut(r['dir'], 24), 24)} 空仓库，跳过")
+            continue
+        err = _sync_commit(adir, r, r["dir"])
+        if err:
+            failed.append({"dir": r["dir"], "msg": err})
+            say(f"  {_pad(_cut(r['dir'], 24), 24)} {err}")
+            continue
+        st = repo_sync_state(adir)          # 提交后分支/上游可能刚建立，重读
+        res = _sync_push(adir, st)
+        res["committed"] = r["pending"]
+        if res["ok"]:
+            done.append(res)
+            head = f"{r['pending']} 项改动已提交 → " if r["pending"] else "无改动 → "
+            say(f"  {_pad(_cut(r['dir'], 24), 24)} {head}{res['branch']} 推送成功")
+        else:
+            failed.append({"dir": r["dir"], "msg": res["msg"]})
+            say(f"  {_pad(_cut(r['dir'], 24), 24)} {res['msg']}")
+    say()
+    say(f"  推送 {len(done)} 个 · 跳过 {len(skipped)} 个（未配远端）· 失败 {len(failed)} 个")
+    if failed:
+        say()
+        say("  失败的不重试、不回退：归档仓库里的提交还在本地，处理完再跑一次即可。")
+    say()
+    if as_json:
+        print(json.dumps({"pushed": done, "failed": failed,
+                          "skipped": [r["dir"] for r in skipped]},
+                         ensure_ascii=False, indent=2))
+    return 0 if not failed else 1
 
 
 # ================================================================ 按日恢复
@@ -4915,7 +5212,7 @@ def main():
     ap.add_argument("cmd",
                     choices=["scan", "render", "run", "pending", "status",
                              "git-clean", "daylog", "log", "find", "stats", "report",
-                             "restore"],
+                             "restore", "sync"],
                     help="scan=采集/render=渲染/run=全流程/pending=待归纳/status=状态/"
                          "git-clean=重建归档器创建的 git 仓库以清除历史大对象/"
                          "daylog=按天汇总开发活动（预览，零写入）/"
@@ -4923,7 +5220,8 @@ def main():
                          "find=跨项目检索（名字/文件名/指令原文，只读）/"
                          "stats=跨天账本：最近 N 天的对话/文件/token（只读）/"
                          "report=写成单文件 HTML 账本（可截图分享）/"
-                         "restore=按日恢复归档快照到副本目录（默认只预览）")
+                         "restore=按日恢复归档快照到副本目录（默认只预览）/"
+                         "sync=归档仓库同步：看哪些没推，或 --push 推到各自远端")
     ap.add_argument("query", nargs="?", default="",
                     help="find 的检索词，可空格分隔多个词（全部命中才计入）")
     ap.add_argument("--open", action="store_true", dest="open_it",
@@ -4957,6 +5255,9 @@ def main():
                          "/ restore 的输出目录（默认 <target>/_restore）")
     ap.add_argument("--write", action="store_true", dest="write_it",
                     help="restore 真正展开副本（默认只预览，不写任何文件）")
+    ap.add_argument("--push", action="store_true",
+                    help="sync 真正提交并推送到各归档仓库自己配的远端（默认只预览；"
+                         "未配远端的不推，永不 force）")
     a = ap.parse_args()
 
     sources = [x.strip() for x in (a.source or "").split(",") if x.strip()]
@@ -4989,6 +5290,10 @@ def main():
                            write=a.write_it, force=a.force, as_json=a.json)
     if a.cmd == "status":
         return cmd_status(target)
+    if a.cmd == "sync":
+        # 只动各归档仓库自己（提交 + 推送），不碰归档正文与 state.json，
+        # 因此不加锁：定时任务正在写的时候也该能查「推到哪儿了」。
+        return cmd_sync(target, push=a.push, only=a.only, as_json=a.json)
     if a.cmd == "pending":
         return cmd_pending(target)
     if a.cmd == "git-clean":

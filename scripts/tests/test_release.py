@@ -5,10 +5,13 @@
 守的是一件事：**版本号三处必须同步**。
     pyproject.toml 的 version
     archiver.py 的 __version__
-    CHANGELOG.md 的最新条目标题
+    CHANGELOG.md 的最新**版本**条目
 
 飘了比没有更糟——用户报「0.3.0 有问题」，代码里却是别的数，排查从第一句就错。
 这里不查"号该不该是 0.3.0"（那是人的判断），只查三处是不是同一个数。
+
+`## 未发布 · 0.4.0 进行中` 这类标题故意不计入：它不是一个已发布的版本，
+把它算进来等于允许"work in progress"顶着版本号。真正发布时再写 `## 0.4.0 · 日期`。
 
 运行：
     python scripts/tests/test_release.py
