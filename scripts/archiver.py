@@ -34,13 +34,16 @@
 
 import argparse
 import hashlib
+import html as _html
 import json
 import os
 import re
 import shutil
 import sys
 import time
-from datetime import datetime, timezone
+import unicodedata
+import webbrowser
+from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 
 # 适配器包与主程序同目录；脚本直跑时 sys.path[0] 已是本目录，
@@ -49,7 +52,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from adapters import REGISTRY, build_index, get_adapter, get_adapters  # noqa: E402
 from adapters.base import (EV_ASSISTANT, EV_PROMPT,  # noqa: E402
-                           EV_TITLE, EV_TOOL, EV_TOOL_RESULT, EV_TS, EV_WRITE)
+                           EV_TITLE, EV_TOOL, EV_TOOL_RESULT, EV_TS, EV_USAGE,
+                           EV_WRITE, cmd_class, git_identity, git_work_tree,
+                           tool_type)
+
+# ---------------------------------------------------------------- 版本
+# 与 pyproject.toml 的 version、CHANGELOG.md 最新条目标题必须一致。
+# 三处同步是发版动作的一部分，`test_release.py` 会核对——版本号飘了比没版本号更糟：
+# 用户报 bug 说"0.3.0 有问题"，代码里却是别的数，排查从第一句就开始错。
+#
+# 版本号口径：**等于计划中已完成档位的最高一个**，不提前（虚报）、不落后（漏报）。
+# 阶段名属计划文档，版本号属产物。
+__version__ = "0.3.0"
 
 # ---------------------------------------------------------------- 控制台编码
 try:
@@ -93,6 +107,10 @@ DEFAULTS = {
     "min_code_files": 5,       # 判定为代码项目的源码文件数下限
     "git_enabled": True,       # 每个项目目录独立 git init
 }
+
+# .git 体积超过此值时 status 提示手动 gc。不做自动 gc：
+# 它会在每日定时任务里拖长执行时间，得不偿失。
+GIT_WARN_BYTES = 200 * 1024 * 1024
 
 # ---------------------------------------------------------------- 扩展名表
 CODE_EXT = {
@@ -279,6 +297,21 @@ def human_size(n: int) -> str:
     return f"{n:.1f} TB"
 
 
+def dir_bytes(p: Path) -> int:
+    """目录实际占用的字节数（用于 .git 体积体检）"""
+    total = 0
+    try:
+        for root, _dirs, files in os.walk(p):
+            for fn in files:
+                try:
+                    total += (Path(root) / fn).stat().st_size
+                except Exception:
+                    pass
+    except Exception:
+        return total
+    return total
+
+
 def sha1_text(s: str) -> str:
     return hashlib.sha1(s.encode("utf-8", "replace")).hexdigest()
 
@@ -366,8 +399,10 @@ def pick_override(ov: dict, key: str, dirname: str) -> dict:
 
 def short_title(t: str, maxlen: int = 22) -> str:
     """把一句口语化需求压成短标题：切在第一个标点，超长截断"""
-    t = re.sub(r"^[@\s#]+", "", (t or "").strip())
-    t = re.split(r"[，。；：,;:！？!?\n]", t)[0].strip()
+    # 开头的 @ / 井号 / 斜杠是编辑器标记或注释符，不是内容
+    t = re.sub(r"^[@\s#/\\]+", "", (t or "").strip())
+    # 冒号只在「不是协议分隔符」时才切：否则 "https://x" 会被切成 "https"
+    t = re.split(r"[，。；：,;！？!?\n]|:(?!//)", t)[0].strip()
     return t[:maxlen] if len(t) > maxlen else t
 
 
@@ -375,32 +410,77 @@ JUNK_TITLE_PAT = re.compile(
     r"^(e|d|c|a|b|summary|image#?\d+|screenshot\d*|clipboard[_-]?\d*|"
     r"untitled|new chat|新对话|\d+)$", re.I)
 
+# 纯链接 / 纯路径 / 纯主机名：这是「用户贴了个地址」，不是项目名
+URL_LIKE_PAT = re.compile(r"(?i)^(https?|ftp|file|www\.|git@|ssh://)")
+PATH_LIKE_PAT = re.compile(r"^(?:[A-Za-z]:[\\/]|[/\\]|~[\\/]|\.{1,2}[\\/])")
+HOST_ONLY_PAT = re.compile(
+    r"(?i)^(?:localhost|github|gitee|gitlab|google|baidu|bing)(?:\.com)?$")
+
+# 句子感：出现这些词说明是「一句话」，不是「一个名字」
+SENTENCE_HINT = re.compile(
+    r"(为什么|怎么办|如何|怎么|是否|能不能|可不可以|请问|帮我|麻烦|我想|"
+    r"我们|需要|要求|下面|现在|一下)")
+
 
 def is_junk_title(t: str) -> bool:
-    """识别明显无意义的标题（单字母、图片占位名等）"""
+    """识别明显不适合当项目名的标题。
+
+    三类：占位名（单字母、截图名）、纯地址（URL/路径/主机名）、句子（口语化请求）。
+    最后一条最要紧——实测项目名里出现过 `https`、`密码为什么为空 LoginPanel`，
+    根源是把「用户随口说的话」当成了「项目叫什么」。
+    """
     t = (t or "").strip()
     if len(t) < 4:
         return True
-    return bool(JUNK_TITLE_PAT.match(t))
+    if JUNK_TITLE_PAT.match(t):
+        return True
+    if URL_LIKE_PAT.match(t) or PATH_LIKE_PAT.match(t) or HOST_ONLY_PAT.match(t):
+        return True
+    # 句子：长度够长且带疑问/请求语气一律不认；短句仍保留，信息量还在
+    if len(t) >= 14 and SENTENCE_HINT.search(t):
+        return True
+    return False
+
+
+def url_host_name(t: str) -> str:
+    """纯链接标题退化为主机名：https://www.example.org/chapterq?... → example.org
+
+    链接当标题时，主机名比「Python 项目」有信息量得多——三个同类项目
+    退回语言兜底，名字就完全一样了，用户根本分不清。
+    """
+    m = re.search(r"(?i)^(?:https?://)?(?:www\.)?([a-z0-9-]+(?:\.[a-z0-9-]+)+)", t or "")
+    return m.group(1) if m else ""
 
 
 def pick_title(titles: list) -> str:
-    """从若干候选标题中挑最像『项目名』的一个（短、不含请求语气）"""
+    """从若干候选标题中挑最像『项目名』的一个（短、不含请求语气）。
+
+    三级兜底：像名字的标题 → 链接的主机名 → 剩下的句子（截断）。
+    最后一级是被迫的：一个能区分彼此的长句，好过三个都叫「Python 项目」。
+    """
     cands = [t for t in titles if t and t.strip() and not is_junk_title(t)]
-    if not cands:
-        return ""
+    if cands:
+        def score(t):
+            s = 0.0
+            if len(t) <= 24:
+                s += 2
+            if not SENTENCE_HINT.search(t):
+                s += 2
+            if re.search(r"(系统|工具|平台|应用|插件|归档|助手|App|app)", t):
+                s += 1
+            return s - len(t) / 100.0
 
-    def score(t):
-        s = 0.0
-        if len(t) <= 24:
-            s += 2
-        if not re.search(r"(请|帮我|需要|我们的|要求|下面|现在)", t):
-            s += 2
-        if re.search(r"(系统|工具|平台|应用|插件|归档|助手|App|app)", t):
-            s += 1
-        return s - len(t) / 100.0
+        return short_title(max(cands[:6], key=score), 28)
 
-    return short_title(max(cands[:6], key=score))
+    for t in titles:
+        if t and URL_LIKE_PAT.match(t.strip()):
+            h = url_host_name(t)
+            if h:
+                return h
+
+    weak = [t for t in titles
+            if t and len(t.strip()) >= 4 and not JUNK_TITLE_PAT.match(t.strip())]
+    return short_title(weak[0], 28) if weak else ""
 
 
 def safe_name(s: str, maxlen: int = 40) -> str:
@@ -416,8 +496,22 @@ def desensitize(s: str) -> str:
     if not s:
         return s
     s = SECRET_TOKEN_PAT.sub("<REDACTED>", s)
-    s = SECRET_KV_PAT.sub(lambda m: re.split(r"[:=]", m.group(0), 1)[0] + "=<REDACTED>", s)
+    s = SECRET_KV_PAT.sub(
+        lambda m: re.split(r"[:=]", m.group(0), maxsplit=1)[0] + "=<REDACTED>", s)
     return s
+
+
+# 区外写入经常顺手改到配置与凭据：.ssh/config、.env、id_rsa 之类。
+# 归档侧本来就按 SENSITIVE_NAMES 剔除，但日志是「给人看」的出口，必须同样拦住——
+# 路径本身就是信息（哪台机器、哪个云账号），何况它还会被贴进群里。
+SENSITIVE_PATH_HINT = re.compile(
+    r"(^|/)(\.ssh|\.aws|\.kube|\.gnupg|\.docker|credentials|secrets?)(/|$)"
+    r"|(^|/)\.env(\.|$)|id_rsa|id_ed25519|\.pem$|\.pfx$|\.p12$", re.I)
+
+
+def safe_path_label(p: str) -> str:
+    """敏感路径在日志里只留占位符，不暴露具体位置。"""
+    return "（敏感路径已隐藏）" if SENSITIVE_PATH_HINT.search(str(p).replace("\\", "/")) else str(p)
 
 
 def is_sensitive(p: Path) -> bool:
@@ -435,6 +529,147 @@ def should_skip_dir(name: str) -> bool:
 def is_engine_file(name: str, ext: str) -> bool:
     """是否为工程入口文件（决定源码可构建性的锚点）"""
     return ext in ENGINE_EXT or name.lower() in ENGINE_NAMES
+
+
+# ---------------------------------------------------------------- 项目身份
+# 平台自动生成的工作区目录：时间戳型（2026-11-18-21-34-40 / 20260328171213）。
+# 这类名字对用户毫无辨识度，绝不能当选项目名。
+PLATFORM_DIR_PAT = re.compile(r"^\d{4}-\d{2}-\d{2}(-\d{2}-\d{2}-\d{2})?$|^\d{8,14}$")
+# 目录名本身是通用词时，同样没有辨识度
+GENERIC_DIRS = {"src", "source", "app", "main", "test", "tests", "build", "dist",
+                "repo", "project", "workspace", "code", "temp", "tmp", "new folder",
+                "untitled", "downloads", "desktop", "documents", "my documents",
+                "www", "wwwroot", "public", "static"}
+# 清单文件里的占位名，不能当项目名
+GENERIC_PKG_NAMES = {"app", "my-app", "myapp", "project", "example", "demo", "test",
+                     "main", "root", "package", "workspace", "untitled", "com", "org"}
+
+
+def _clean_identity(raw: str) -> str:
+    """把仓库地址/包名清成可用名：去协议、去 userinfo、去 .git、去 org 前缀。"""
+    s = (raw or "").strip().strip("\"'")
+    s = re.sub(r"\.git/*$", "", s, flags=re.I)
+    if "://" in s:
+        s = s.split("://", 1)[1]               # https://host/org/repo → host/org/repo
+        s = re.sub(r"^[^/@]*@", "", s)         # 万一还有 userinfo
+    elif ":" in s and "/" in s:
+        s = s.split(":", 1)[1]                 # git@host:org/repo → org/repo
+    s = s.rstrip("/").rsplit("/", 1)[-1]
+    return s.strip()
+
+
+def _accept_identity(s: str) -> bool:
+    """身份名是否可用：长度、通用词、占位名、句子感都要过。
+
+    注意这里**不能直接复用 is_junk_title**：它把「长度 < 4」也判为垃圾，
+    而 `CDN`、`QMS` 这类三字母项目名是真实存在的（实测就把 CDN 误杀成
+    「C# 项目」）。身份名的下限是 2 个字符，只拦纯占位名。
+    """
+    t = (s or "").strip()
+    if len(t) < 2 or len(t) > 40:
+        return False
+    low = t.lower()
+    if low in GENERIC_PKG_NAMES or low in GENERIC_DIRS:
+        return False
+    if JUNK_TITLE_PAT.match(t):
+        return False
+    if URL_LIKE_PAT.match(t) or PATH_LIKE_PAT.match(t) or HOST_ONLY_PAT.match(t):
+        return False
+    if len(t) >= 14 and SENTENCE_HINT.search(t):
+        return False
+    return True
+
+
+def git_remote_name(ws: Path) -> str:
+    """从 origin 远端取仓库名。
+
+    带凭据的 URL（https://user:token@host/repo.git）必须先剜掉 userinfo——
+    这个名字会进目录名与 README，token 不能跟着走。
+    """
+    import subprocess
+    if not (ws / ".git").exists():
+        return ""
+    try:
+        r = subprocess.run(["git", "-C", str(ws), "config", "--get", "remote.origin.url"],
+                           capture_output=True, text=True, timeout=8,
+                           encoding="utf-8", errors="replace")
+    except Exception:
+        return ""
+    url = (r.stdout or "").strip()
+    if not url:
+        return ""
+    if "://" in url:
+        url = re.sub(r"://[^/@]*@", "://", url)
+    return _clean_identity(url)
+
+
+def _shallowest(rels: list, suffix: str) -> list:
+    """取指定后缀的文件，只保留目录最浅的一层（避免子工程抢名）"""
+    hit = [r for r in rels if r.lower().endswith(suffix)]
+    if not hit:
+        return []
+    depths = [r.replace("\\", "/").count("/") for r in hit]
+    d0 = min(depths)
+    return [r for r, d in zip(hit, depths) if d == d0]
+
+
+def manifest_name(ws: Path, rels: list) -> str:
+    """从工程清单取项目名。只认「最浅一层」的清单，且同层有歧义时放弃。"""
+    low = {r.replace("\\", "/").lower(): r for r in rels}
+
+    if "package.json" in low:
+        try:
+            data = json.loads(read_text(ws / low["package.json"], 200000) or "{}")
+            n = data.get("name")
+            if isinstance(n, str) and n.strip():
+                return n.strip()
+        except Exception:
+            pass
+
+    for fname in ("pyproject.toml", "cargo.toml"):
+        if fname in low:
+            m = re.search(r'(?m)^\s*name\s*=\s*["\']([^"\']+)["\']',
+                          read_text(ws / low[fname], 200000))
+            if m:
+                return m.group(1).strip()
+
+    if "go.mod" in low:
+        m = re.search(r"(?m)^module\s+(\S+)",
+                      read_text(ws / low["go.mod"], 200000))
+        if m:
+            return m.group(1).strip().rsplit("/", 1)[-1]
+
+    # .NET：优先 AssemblyName，其次文件名；同层多个视为歧义
+    for suf in (".csproj", ".sln"):
+        cands = _shallowest(rels, suf)
+        if len(cands) != 1:
+            continue
+        rel = cands[0]
+        if suf == ".csproj":
+            m = re.search(r"<AssemblyName>\s*([^<]+?)\s*</AssemblyName>",
+                          read_text(ws / rel, 200000))
+            if m and m.group(1).strip():
+                return m.group(1).strip()
+        return Path(rel).stem
+    return ""
+
+
+def identity_name(ws: Path, rels: list) -> tuple:
+    """按「身份强度」取项目名，返回 (名字, 依据说明)。
+
+    强度：git 远端 > 工程清单 > 工作区目录名。三者都拿不到才交给会话标题——
+    会话标题是「用户随口说的话」，不是「项目叫什么」，只能当最后的兜底。
+    """
+    n = git_remote_name(ws)
+    if _accept_identity(n):
+        return n, "git remote origin"
+    n = manifest_name(ws, rels)
+    if _accept_identity(n):
+        return n, "工程清单"
+    base = ws.name
+    if base and not PLATFORM_DIR_PAT.match(base) and _accept_identity(base):
+        return base, "工作区目录名"
+    return "", ""
 
 
 def is_temp_script(rel: str, name: str) -> bool:
@@ -552,6 +787,7 @@ class SessionParser:
         self.titles = []
         self.tool_counts = {}
         self.written = {}        # rel -> content（最后一次写入）
+        self.touched = {}        # rel -> op（含只有路径的编辑动作）
         self.decisions = []
         self.errors = []
         self.assistant_chars = 0
@@ -598,6 +834,9 @@ class SessionParser:
                 rel, content = ev.get("rel"), ev.get("content")
                 if rel and isinstance(content, str) and content:
                     self.written[rel] = content
+                elif rel:
+                    # 只有路径的编辑动作（op=edit）：归档不用，但按天聚合要用
+                    self.touched[rel] = ev.get("op") or "edit"
             elif kind == EV_TOOL_RESULT:
                 txt = (ev.get("text") or "").strip()
                 if txt:
@@ -743,6 +982,8 @@ class Project:
         self.first_ts = None
         self.last_ts = None
         self.name = ""
+        self.name_src = ""      # 名字取自哪个证据（git remote / 工程清单 / 目录名 / 会话标题）
+        self.entries = []       # 工程入口文件，供 --explain 展示判定依据
         self.key = ""
 
     def compute(self, min_code: int):
@@ -755,6 +996,8 @@ class Project:
             self.cls = classify_files(self.files)
             self.tech = detect_tech(ws, self.files)
             self.memory = self._load_memory(ws)
+            self.entries = [f[0] for f in self.files
+                            if is_engine_file(Path(f[0]).name, f[3])][:6]
         else:
             self.cls = {"code": 0, "doc": 0, "media": 0, "other": 0, "total_files": 0,
                         "total_bytes": 0, "langs": [], "language": "—"}
@@ -784,15 +1027,29 @@ class Project:
         return self
 
     def _guess_name(self):
-        """预命名：优先取最像项目名的会话标题，其次取语言/目录名"""
+        """预命名：身份证据优先，会话标题只作兜底。
+
+        顺序：git 远端 > 工程清单 > 工作区目录名 > 会话标题 > 语言。
+        前三级是「磁盘上的事实」，后两级是「猜测」。旧版把猜测放在第一位，
+        于是出现了叫 `https`、`密码为什么为空 LoginPanel` 的项目。
+        """
+        ws = Path(self.workspace)
+        if ws.exists():
+            n, src = identity_name(ws, [f[0] for f in self.files])
+            if n:
+                self.name_src = src
+                return safe_name(n)
         titles = [s.get("title") for s in sorted(self.sessions,
                                                  key=lambda x: x.get("created") or 0)]
         t = pick_title([x for x in titles if x])
         if t:
+            self.name_src = "会话标题"
             return safe_name(t)
         if self.cls.get("langs"):
+            self.name_src = "语言兜底"
             return safe_name(f"{self.cls['langs'][0][0]} 项目")
-        return safe_name(Path(self.workspace).name)
+        self.name_src = "目录名兜底"
+        return safe_name(ws.name)
 
     def _load_memory(self, ws: Path) -> str:
         """读取工作区项目记忆（requirement: 回顾开发过程记忆）。
@@ -821,14 +1078,20 @@ class Project:
 
 
 def refine_name(p: Project, parses: dict):
-    """会话标题无效（如 'E' / 'summary'）时，用首条真实提问重新预命名"""
+    """会话标题无效（如 'E' / 'summary'）时，用首条真实提问重新预命名。
+
+    名字若已由身份证据（git/清单/目录名）确定，则不再改写——
+    磁盘上的事实优先于对话里的措辞。
+    """
+    if p.name_src and p.name_src != "会话标题":
+        return
     if p.name and not is_junk_title(p.name):
         return
     for s in p.sessions:
         pr = parses.get(s["sid"]) or {}
         for x in (pr.get("prompts") or [])[:2]:
-            t = short_title(x, 20)
-            if len(t) >= 4:
+            t = short_title(x, 28)
+            if len(t) >= 4 and not is_junk_title(t):
                 p.name = safe_name(t)
                 return
 
@@ -1439,8 +1702,184 @@ coverage/
 """
 
 
-def git_init(adir: Path, name: str) -> str:
-    """为项目目录初始化独立仓库（幂等）。返回 ok / exists / fail"""
+# 归档器提交的标记。git-clean 靠它判断「历史是否全由我产生」，比匹配中文文案可靠：
+# 文案会改，标记不会。
+ARCHIVER_TRAILER = "X-Archiver: dev-project-archivist"
+LEGACY_PREFIX = ("init: 归档", "sync: 同步")   # v0.1.x 提交，无 trailer
+COMMIT_MAX_ITEMS = 5       # 提交信息最多列 5 条，再多就没人读了
+COMMIT_ITEM_LEN = 40       # 单条截断长度（`git log --oneline` 一行放得下）
+
+# 自由文本里的敏感路径检测。SENSITIVE_PATH_HINT 是按「路径列表」写的——要求 .ssh
+# 在开头或紧跟 /，而用户写「把 .ssh/config 权限改一下」时前面是空格，锚定版会漏。
+SENSITIVE_TEXT_HINT = re.compile(
+    r"(?<![A-Za-z0-9_\-])(\.ssh|\.aws|\.kube|\.gnupg|\.docker|credentials)\b"
+    r"|(?<![A-Za-z0-9_\-])\.env\b"
+    r"|id_rsa|id_ed25519|\.(pem|pfx|p12|key)\b", re.I)
+
+# 平台注入的痕迹，进 commit 没有意义：`@skill:ardot-design-assistant`、`/clear`
+SKILL_MARK = re.compile(r"@skill:[\w.\-]+", re.I)
+SLASH_CMD = re.compile(r"^/[A-Za-z][\w\-]*$")
+# 纯路径 / 纯链接：真实数据里 "F:\" 就是一条指令，它说明不了任何事
+BARE_PATH = re.compile(r"^([A-Za-z]:[\\/]|https?://|\\\\|~?/[\w.\-]+/?)")
+
+# 主题挑选：真实数据里最新的一条往往是「问题仍然存在」「继续」「在E盘」这类追问，
+# 拿它当主题等于没写。按信息量挑，而不是按时间挑。
+SUBJECT_BAD_START = re.compile(
+    r"^(继续|还是|仍然|再次|不用|不要|不行|不对|不是|没问题|问题|好了|可以了|先不|"
+    r"不动|在|是|对|嗯|哦|好|行|那|这|还有|然后|再试)")
+SUBJECT_ACT = re.compile(
+    r"(修复|新增|实现|修改|优化|重构|添加|删除|调整|支持|接入|迁移|完成|生成|导入|"
+    r"导出|检查|分析|改造|升级|替换|设计|编写|整理|排查|联调|测试|梳理|拆分)")
+# 「接着干」类指令：它们只说"继续"，没说继续什么，作主题等于没写
+SUBJECT_META = re.compile(
+    r"(继续未完成|继续按计划|接着做|按上面的|按上面的思路|继续上一步|继续之前|"
+    r"断网|重新发送|再发一次|按计划实施)")
+CODE_HINT = re.compile(
+    r"[{};]|#define|#include|=>|\b(public|private|protected|void|class|function)\b"
+    r"|</\w+>|^\s*//")
+
+
+def commit_item(t: str) -> str:
+    """一条指令 → 一行可进 commit 的短语。返回空串表示这条不该出现。
+
+    三条硬约束：
+    - **先脱敏再截断**：反过来的话，token 会被截成半截，正好躲过密钥正则；
+    - **只取单行**：多行指令里常贴着代码，塞进 commit 会让 `git log` 变噪声；
+    - **提到敏感路径的整条丢弃**：commit 信息会进 git 历史，局部替换成「已隐藏」
+      之后语义会变形（"改了 .ssh/config 的权限" 变成 "改了（已隐藏）的权限"），
+      不如不要。
+    """
+    t = desensitize(t or "")
+    if len(t) > 400:            # 超长指令先砍，避免对整段代码做正则
+        t = t[:400]
+    # 顺序要紧：先取第一行再压空白。反过来会把整段拉成一行，多行指令里的代码全跟进来
+    line = ""
+    for raw in t.splitlines():
+        if raw.strip():
+            line = raw
+            break
+    t = " ".join(line.split())
+    t = " ".join(SKILL_MARK.sub(" ", t).split())   # 剥掉 @skill:xxx 再判空
+    if SENSITIVE_TEXT_HINT.search(t):
+        return ""
+    t = re.sub(r"^[@#>\s]+", "", t).strip()
+    if len(t) < 3:              # "好" "继续" 这种没有信息量；中文三字已是完整语义
+        return ""
+    if SLASH_CMD.match(t) or BARE_PATH.match(t):
+        return ""               # "/clear"、"F:\" 不构成一条工作记录
+    if len(t) > COMMIT_ITEM_LEN:
+        t = t[:COMMIT_ITEM_LEN].rstrip(" ，。,.、;；") + "…"
+    else:
+        # "你分析有误：" 这种是引子，后面跟着列表；留着冒号在 commit 里像断了一半
+        t = t.rstrip(" ：:，,、")
+    return t if len(t) >= 3 else ""
+
+
+def subject_score(item: str) -> int:
+    """给候选主题打分：越像「一件具体做完的事」分越高。
+
+    实测样本里最高分和最低分的差距很大：
+        "新增范围配置表 config_scope"            像一件事
+        "问题仍然存在" / "在e盘" / "F:\\"        什么都不说明
+        "//#define RecordStrokeData 调试用"      是贴进来的代码
+    """
+    s, n = 0, len(item)
+    if 10 <= n <= COMMIT_ITEM_LEN:
+        s += 2
+    elif n > COMMIT_ITEM_LEN:
+        s += 1                  # 被截断的长指令：通常是交代得很细的真任务
+    elif 6 <= n < 10:
+        s -= 1
+    else:
+        s -= 3                  # 太短，多半是追问或应答
+    if SUBJECT_BAD_START.match(item):
+        s -= 2
+    if SUBJECT_META.search(item):
+        s -= 3                  # "继续未完成的工作"：说了等于没说
+    if SUBJECT_ACT.search(item):
+        s += 2
+    if CODE_HINT.search(item):
+        s -= 4
+    return s
+
+
+def sync_subject(name: str, prompts) -> tuple:
+    """把「上次提交以来的指令」压成 (主题, 其余条目)。
+
+    主题按信息量挑，不按时间挑——最新的那条常常是「还是不行」。
+    没有可用指令时返回 ("", [])，由调用方退回原文案，不编造。
+    """
+    items, seen = [], set()
+    for raw in reversed(list(prompts or [])):     # 最新在前
+        it = commit_item(raw)
+        if not it or it in seen:                  # 同一句反复问，不该重复占位
+            continue
+        seen.add(it)
+        items.append(it)
+    if not items:
+        return "", []
+    head = max(items, key=subject_score)           # 同分时 max 取第一个 = 最新的
+    others = [x for x in items if x != head][:COMMIT_MAX_ITEMS - 1]
+    total = min(len(items), COMMIT_MAX_ITEMS)
+    if total > 1:
+        head = f"{head} 等 {total} 项"
+    return head, others
+
+
+def git_last_commit_ts(adir: Path) -> int:
+    """最后一次提交的时间（Unix 秒）。无仓库 / 无提交返回 0。"""
+    import subprocess
+    if not (adir / ".git").exists():
+        return 0
+    try:
+        r = subprocess.run(["git", "log", "-1", "--format=%ct"], cwd=str(adir),
+                           capture_output=True, text=True, timeout=30,
+                           encoding="utf-8", errors="replace")
+        return int((r.stdout or "0").strip() or 0)
+    except Exception:
+        return 0
+
+
+def recent_prompts(p, parses: dict, since_ms: int = 0) -> list:
+    """收集 since 之后该项目收到的指令（旧→新）。
+
+    用「上次归档提交的时间」而不是「今天 0 点」划界：定时任务若在 00:05 跑，
+    按自然日会把前一天晚上的活全漏掉。这也让漏跑一天后能自动补齐。
+    """
+    out = []
+    for s in p.sessions:
+        pr = parses.get(s.get("sid")) or {}
+        if since_ms:
+            ts = pr.get("last_ts") or s.get("updated") or s.get("created") or 0
+            if ts and ts <= since_ms:
+                continue
+        out.extend(pr.get("prompts") or [])
+    return out
+
+
+def archiver_commits_only(adir: Path) -> bool:
+    """仓库历史是否全部由归档器产生（决定 git-clean 能不能安全重建）。"""
+    import subprocess
+    try:
+        r = subprocess.run(["git", "log", "--format=%B%x1e"], cwd=str(adir),
+                           capture_output=True, text=True, timeout=60,
+                           encoding="utf-8", errors="replace")
+    except Exception:
+        return False
+    recs = [x.strip() for x in (r.stdout or "").split("\x1e") if x.strip()]
+    for rec in recs:
+        if ARCHIVER_TRAILER in rec or rec.startswith(LEGACY_PREFIX):
+            continue
+        return False
+    return True
+
+
+def git_init(adir: Path, name: str, prompts=None, note: str = "") -> str:
+    """为项目目录初始化独立仓库（幂等）。返回 ok / exists / fail
+
+    prompts 是「上次提交以来」该项目收到的指令（旧→新），用来生成可读的提交信息。
+    传空就退回原文案——**宁可信息少，不可编造**。
+    """
     import subprocess
     gitdir = adir / ".git"
     if gitdir.exists():
@@ -1451,11 +1890,17 @@ def git_init(adir: Path, name: str) -> str:
                                encoding="utf-8", errors="replace")
             if r.returncode != 0 or not (r.stdout or "").strip():
                 return "exists"
+            changed = len([x for x in (r.stdout or "").splitlines() if x.strip()])
+            head, more = sync_subject(name, prompts)
+            subject = note or head or f"同步 {name} 归档内容（{changed} 项变化）"
+            body = [f"- {x}" for x in more]
+            body.append(ARCHIVER_TRAILER)
+            msg = f"sync: {subject}\n\n" + "\n".join(body)
             subprocess.run(["git", "add", "-A"], cwd=str(adir), capture_output=True,
                            timeout=120)
             subprocess.run(["git", "-c", "user.name=archiver",
                             "-c", "user.email=archiver@local",
-                            "commit", "-q", "-m", f"sync: 同步 {name} 归档内容"],
+                            "commit", "-q", "-m", msg],
                            cwd=str(adir), capture_output=True, text=True,
                            timeout=120, encoding="utf-8", errors="replace")
             return "committed"
@@ -1470,7 +1915,8 @@ def git_init(adir: Path, name: str) -> str:
                        timeout=180)
         subprocess.run(["git", "-c", "user.name=archiver",
                         "-c", "user.email=archiver@local",
-                        "commit", "-q", "-m", f"init: 归档 {name}"],
+                        "commit", "-q", "-m",
+                        f"init: 归档 {name}\n\n{ARCHIVER_TRAILER}"],
                        cwd=str(adir), capture_output=True, text=True,
                        timeout=180, encoding="utf-8", errors="replace")
         # 首次提交后打一次包，避免 loose objects 让 .git 体积虚高
@@ -1496,8 +1942,44 @@ def project_fingerprint(p: Project, parses: dict) -> str:
 
 
 # ================================================================ 扫描主流程
+def explain_projects(projects: list, kw: str = "", min_code: int = 0) -> int:
+    """打印判定依据：为什么算代码项目、名字取自哪个证据。
+
+    第一次跑的人一定会怀疑「你判得对不对」。让他能问「凭什么」，
+    比让判定更准更有效——能被验证的系统才敢信任。
+    """
+    kw = (kw or "").lower()
+    hit = [p for p in projects
+           if not kw or kw in p.name.lower() or kw in p.workspace.lower()]
+
+    def conf(p):
+        code = p.cls["code"]
+        if code >= max(min_code * 3, 20) and p.entries:
+            return "高"
+        if code >= min_code:
+            return "中" if p.entries else "中（无工程入口文件）"
+        return "低"
+
+    for p in hit:
+        print()
+        print(f"{p.name}  →  {p.type}（置信度 {conf(p)}）")
+        print(f"  工作区    {safe_path_label(p.workspace)}")
+        print(f"  文件      源码 {p.cls['code']}（阈值 {min_code}）· 文档 {p.cls['doc']} "
+              f"· 合计 {p.cls['total_files']} 个 / {human_size(p.cls['total_bytes'])}")
+        print(f"  入口      {'、'.join(p.entries[:4]) or '（未检出）'}")
+        print(f"  命名      {p.name}   ← {p.name_src or '未知'}")
+        print(f"  会话      {len(p.sessions)} 个 · {day(p.first_ts)} → {day(p.last_ts)}")
+    print()
+    if not hit:
+        print(f"没有匹配「{kw}」的项目")
+    else:
+        print(f"共 {len(hit)} 个")
+    return 0
+
+
 def run_scan(target: Path, dry_run=False, limit=0, only="", force=False,
-             full_copy=False, min_code=None, verbose=True, sources=None):
+             full_copy=False, min_code=None, verbose=True, sources=None,
+             show_all=False, explain=None):
     t0 = now_ts()
     min_code = min_code or DEFAULTS["min_code_files"]
     adapters = get_adapters(sources)
@@ -1518,18 +2000,30 @@ def run_scan(target: Path, dry_run=False, limit=0, only="", force=False,
     log(f"[2/5] 归并完成：{len(projects)} 个项目单元")
 
     if dry_run:
+        if explain is not None:
+            return explain_projects(projects, explain, min_code)
+        # 空壳（工作区存在但无源码）默认不列：一张「一半是空壳」的表没人想看，
+        # 但它是真实数据，不能藏——用一行说明交代清楚。
+        rows = projects if show_all else [p for p in projects if p.type != "空壳"]
+        hidden = len(projects) - len(rows)
+        # 列宽按终端显示宽度算（CJK 记 2），否则中文名会把表撑歪
         print()
-        print(f"{'日期':<11} {'类型':<7} {'语言':<14} {'码':>4} {'档':>4} {'文件':>5} 项目")
-        print("-" * 92)
-        for p in projects:
-            print(f"{day(p.first_ts):<11} {p.type:<7} {(p.cls.get('language') or '—')[:13]:<14} "
-                  f"{p.cls['code']:>4} {p.cls['doc']:>4} {p.cls['total_files']:>5} "
-                  f"{(p.name + '  ' + Path(p.workspace).name)[:34]}")
-        print("-" * 92)
-        code_n = sum(1 for p in projects if p.type == "代码项目")
-        log(f"小计：代码项目 {code_n} / 文档任务 "
-            f"{sum(1 for p in projects if p.type == '文档任务')} / 其余 "
-            f"{len(projects) - code_n - sum(1 for p in projects if p.type == '文档任务')}")
+        print(f"{_pad('日期', 11)} {_pad('类型', 9)} {_pad('语言', 15)} "
+              f"{_pad('码', 4, True)} {_pad('档', 4, True)} {_pad('文件', 5, True)}  项目")
+        print("-" * 99)
+        for p in rows:
+            label = f"{p.name}  {Path(p.workspace).name}"
+            print(f"{_pad(day(p.first_ts), 11)} {_pad(p.type, 9)} "
+                  f"{_pad((p.cls.get('language') or '—')[:15], 15)} "
+                  f"{_pad(p.cls['code'], 4, True)} {_pad(p.cls['doc'], 4, True)} "
+                  f"{_pad(p.cls['total_files'], 5, True)}  {_cut(label, 44)}")
+        print("-" * 99)
+        cnt = {k: sum(1 for p in projects if p.type == k)
+               for k in ("代码项目", "文档任务", "混合产物", "空壳")}
+        log(f"小计：代码项目 {cnt['代码项目']} / 文档任务 {cnt['文档任务']} / "
+            f"混合产物 {cnt['混合产物']} / 空壳 {cnt['空壳']}")
+        if hidden:
+            log(f"空壳 {hidden} 个未列入（工作区存在但无源码），加 --all 查看")
         return 0
 
     target.mkdir(parents=True, exist_ok=True)
@@ -1671,13 +2165,15 @@ def run_scan(target: Path, dry_run=False, limit=0, only="", force=False,
                      json.dumps(manifest["sessions"], ensure_ascii=False, indent=2))
         atomic_write(adir / META_DIR / CONVERSATIONS_FILE,
                      build_conversations(p, parses))
-        make_open_bat(adir, latest["sid"] if latest else "",
-                      (latest.get("source") or "") if latest else "")
+        make_open_script(adir, latest["sid"] if latest else "",
+                         (latest.get("source") or "") if latest else "")
 
         # 独立 git 仓库：便于日后提交与他人 clone 继续开发
         # 注意：git 状态不写入 manifest（否则每次提交都会产生 manifest 变更）
         if DEFAULTS["git_enabled"]:
-            git_init(adir, p.name)
+            git_init(adir, p.name,
+                     prompts=recent_prompts(p, parses,
+                                            git_last_commit_ts(adir) * 1000))
 
         st.update({
             "dir": dirname, "workspace": p.workspace, "name": p.name, "type": p.type,
@@ -1724,7 +2220,19 @@ def run_scan(target: Path, dry_run=False, limit=0, only="", force=False,
 
 # ================================================================ 渲染阶段
 CONVERSATIONS_FILE = "conversations.md"
-OPEN_BAT = "打开原对话.bat"
+
+
+def open_script_name() -> str:
+    """按当前平台给出「打开原对话」脚本的文件名。
+
+    原先固定叫「打开原对话.bat」：非 Windows 上是个废文件，中文名在
+    zip 往返、git core.quotepath、部分 CI 下还会乱码。改用 ASCII 名 + 平台后缀。
+    """
+    if sys.platform.startswith("win"):
+        return "open-session.bat"
+    if sys.platform == "darwin":
+        return "open-session.command"
+    return "open-session.sh"
 
 
 def build_conversations(p: Project, parses: dict) -> str:
@@ -1786,25 +2294,37 @@ def build_conversations(p: Project, parses: dict) -> str:
             L.append("")
     L.append("---")
     L.append("")
-    L.append(f"> 跳转方式：{open_hint_of(src)}，或双击项目根目录的 `{OPEN_BAT}`。")
+    L.append(f"> 跳转方式：{open_hint_of(src)}，或运行项目根目录的 `{open_script_name()}`。")
     L.append("")
     return "\n".join(L)
 
 
-def make_open_bat(adir: Path, latest_sid: str, source: str = "") -> bool:
-    """生成双击即可跳回最近一次原对话的快捷方式。
+def make_open_script(adir: Path, latest_sid: str, source: str = "") -> bool:
+    """生成「双击即可跳回最近一次原对话」的脚本。
 
-    有深链的平台生成 .bat 直接拉起（内容纯 ASCII，避免编码问题）；
-    无深链的平台改生成同名 .md 说明，避免产出点不开的死链。
+    有深链的平台按当前系统生成 .bat / .command / .sh（内容纯 ASCII，避免编码问题）；
+    无深链的平台改生成 open-session.md 说明，避免产出点不开的死链。
+    跨平台交出归档时，README 里仍写明深链格式，可手工粘贴。
     """
     if not latest_sid:
         return False
     link = deep_link_of(latest_sid, source)
     if link:
-        body = ("@echo off\r\n"
-                "start \"\" \"%s\"\r\n" % link)
+        name = open_script_name()
+        if name.endswith(".bat"):
+            body = "@echo off\r\nstart \"\" \"%s\"\r\n" % link
+        elif name.endswith(".command"):
+            body = "#!/bin/sh\nopen \"%s\"\n" % link
+        else:
+            body = "#!/bin/sh\nxdg-open \"%s\" >/dev/null 2>&1 &\n" % link
         try:
-            atomic_write(adir / OPEN_BAT, body)
+            dest = adir / name
+            atomic_write(dest, body)
+            if not name.endswith(".bat"):
+                try:
+                    dest.chmod(0o755)
+                except Exception:
+                    pass
             return True
         except Exception:
             return False
@@ -1814,7 +2334,7 @@ def make_open_bat(adir: Path, latest_sid: str, source: str = "") -> bool:
             "- 会话 ID：`%s`\n"
             "- 打开方式：%s\n" % (ad.display or ad.name, latest_sid, ad.open_hint()))
     try:
-        atomic_write(adir / OPEN_BAT.rsplit(".", 1)[0] + ".md", body)
+        atomic_write(adir / "open-session.md", body)
         return True
     except Exception:
         return False
@@ -2069,7 +2589,7 @@ def render_readme(adir: Path, state_proj: dict, ov: dict = None) -> str:
     L.append("")
     L.append("> 全部用户指令原文（按时间顺序）见 [`_meta/conversations.md`](./_meta/conversations.md)。")
     if m.get("open_conversation"):
-        L.append(f"> 也可双击项目根目录的 `{OPEN_BAT}` 直达最近一次会话。")
+        L.append(f"> 也可运行项目根目录的 `{open_script_name()}` 直达最近一次会话。")
     elif m.get("open_hint"):
         L.append(f"> 该平台不支持深链，恢复方式：{m['open_hint']}。")
     L.append("")
@@ -2161,10 +2681,11 @@ def run_render(target: Path, rename=True, verbose=True):
     state.save()
 
     # README/索引已重写，补一次提交，避免仓库长期停在未提交状态
+    # 这里没有转录可读（render 只吃 state），所以给固定主题，不假装知道"做了什么"
     if DEFAULTS["git_enabled"]:
         for st, adir in rows:
             if st.get("dir") and (adir / ".git").exists():
-                git_init(adir, st.get("name") or adir.name)
+                git_init(adir, st.get("name") or adir.name, note="更新 README 与索引")
 
     log(f"[render] README 更新 {changed} 个，索引项目 {len(rows)} 个")
     return 0
@@ -2297,16 +2818,781 @@ def cmd_status(target: Path):
     nosum = [v for v in arch if not (target / v.get("dir", "") / SUMMARY_FILE).exists()]
     if nosum:
         log(f"缺摘要 {len(nosum)} 个（可运行 pending 查看）")
+
+    # .git 体积体检：每日提交会长期累积，但自动 gc 会拖长定时任务，交由用户决定。
+    total_git, big = 0, []
+    for v in arch:
+        gd = target / v.get("dir", "") / ".git"
+        if not gd.exists():
+            continue
+        sz = dir_bytes(gd)
+        total_git += sz
+        if sz >= GIT_WARN_BYTES:
+            big.append((sz, v.get("name") or v.get("dir") or ""))
+    if total_git:
+        log(f"仓库体积：.git 合计 {human_size(total_git)}")
+    if big:
+        big.sort(reverse=True)
+        log(f"体积偏大 {len(big)} 个（>{human_size(GIT_WARN_BYTES)}），建议执行 git gc：")
+        for sz, nm in big[:5]:
+            log(f"  {human_size(sz):>10}  {nm}")
+        log("  在对应归档目录跑 `git gc --prune=now`，或用 `git-clean` 重建仓库")
     return 0
+
+
+# ================================================================ 检索
+# 权重：用户记得的往往是「名字」，其次是「文件名」，模糊场景才靠指令原文。
+# 摘要只作兜底——它是模型写的，命中它并不代表用户真在这里干过这件事。
+FIND_W = {"name": 10, "file": 3, "prompt": 3, "summary": 1}
+FIND_CAP = 6                 # 同类证据的数量饱和上限（见 cmd_find 注释）
+FIND_MAX_FILES = 4000        # 单项目文件扫描上限，防超大归档拖慢检索
+
+
+def find_tokens(q: str) -> list:
+    """检索词切分：空白分隔；中文没有空格，整串也算一个 token。"""
+    q = (q or "").strip().lower()
+    if not q:
+        return []
+    return [x for x in re.split(r"\s+", q) if x] or [q]
+
+
+def hit_count(text: str, toks: list) -> int:
+    low = (text or "").lower()
+    return sum(1 for t in toks if t in low)
+
+
+def snippet_of(text: str, toks: list, width: int = 44) -> str:
+    """截取命中位置附近的片段，避免长指令铺满屏"""
+    s = " ".join((text or "").split())
+    if not s:
+        return ""
+    low = s.lower()
+    pos = min((low.find(t) for t in toks if t in low), default=-1)
+    if pos < 0 or len(s) <= width * 2:
+        return s[: width * 2] + ("…" if len(s) > width * 2 else "")
+    start = max(0, pos - width // 2)
+    end = min(len(s), pos + width)
+    return ("…" if start else "") + s[start:end] + ("…" if end < len(s) else "")
+
+
+def parse_conversations(md_path: Path) -> list:
+    """解析 _meta/conversations.md → [{title,time,sid,link,prompts}]。
+
+    这个文件是本工具自己写的，格式稳定，直接按行解析比重新解析转录快两个数量级。
+    """
+    out, cur = [], None
+    for line in read_text(md_path, 4_000_000).splitlines():
+        m = re.match(r"^##\s+\d+\.\s*(.*)$", line)
+        if m:
+            cur = {"title": m.group(1).strip(), "time": "", "sid": "",
+                   "link": "", "prompts": []}
+            out.append(cur)
+            continue
+        if cur is None:
+            continue
+        m = re.match(r"^\|\s*时间\s*\|\s*([^|]*?)\s*\|", line)
+        if m:
+            cur["time"] = m.group(1)
+            continue
+        m = re.match(r"^\|\s*会话 ID\s*\|\s*`?([^|`]*)`?\s*\|", line)
+        if m:
+            cur["sid"] = m.group(1).strip()
+            continue
+        m = re.match(r"^\|\s*直接打开\s*\|\s*\[[^\]]*\]\(([^)]+)\)", line)
+        if m:
+            cur["link"] = m.group(1).strip()
+            continue
+        m = re.match(r"^\d+\.\s(.*)$", line)
+        if m:
+            cur["prompts"].append(m.group(1).strip())
+            continue
+        if line.startswith("   > ") and cur["prompts"]:
+            cur["prompts"][-1] += " " + line[5:].strip()
+    return out
+
+
+def walk_source(adir: Path, limit: int = FIND_MAX_FILES) -> list:
+    """列出 source/ 下的相对路径（不做 stat，只要名字）"""
+    src = adir / "source"
+    if not src.exists():
+        return []
+    out = []
+    for root, dirs, files in os.walk(src):
+        dirs[:] = [d for d in dirs if d != ".git"]
+        for fn in files:
+            try:
+                out.append((Path(root) / fn).relative_to(adir).as_posix())
+            except Exception:
+                continue
+            if len(out) >= limit:
+                return out
+    return out
+
+
+def open_session(adir: Path, link: str = "") -> bool:
+    """打开原对话：优先深链，其次项目里的回场脚本。"""
+    import subprocess
+    if not link:
+        return False
+    try:
+        if sys.platform == "win32":
+            os.startfile(link)  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            subprocess.run(["open", link], timeout=10)
+        else:
+            subprocess.run(["xdg-open", link], timeout=10)
+        return True
+    except Exception:
+        return False
+
+
+def cmd_find(target: Path, query: str, as_json: bool = False,
+             show_all: bool = False, open_it: bool = False) -> int:
+    """跨项目检索：名字 → 文件名 → 指令原文 → 摘要，全部命中才计入。"""
+    idx_path = target / INDEX_JSON
+    if not idx_path.exists():
+        log(f"没有索引：{idx_path}")
+        log("先运行 scan 或 run 生成归档，再用 find 检索")
+        return 1
+    toks = find_tokens(query)
+    if not toks:
+        log('用法：archiver.py find <关键词>')
+        log('多个词用空格分隔，全部命中才计入，例如：find "发票 解析"')
+        return 1
+
+    t0 = time.time()
+    try:
+        data = json.loads(read_text(idx_path) or "{}")
+    except Exception as e:
+        log(f"索引损坏：{e}")
+        return 1
+
+    need = set(toks)
+    hits = []
+    for p in data.get("projects") or []:
+        adir = target / (p.get("dir") or "")
+        covered = set()
+        score = 0
+
+        # 1) 名字命中：最强信号，按 token 数线性加权
+        name_text = f"{p.get('name') or ''} {p.get('dir') or ''}"
+        got = {t for t in toks if t in name_text.lower()}
+        if got:
+            covered |= got
+            score += FIND_W["name"] * len(got)
+
+        # 2) 文件名命中：数量做饱和处理。上千个备份文件名不能把评分抬到天上，
+        #    否则「命中 1000 个备份文件」会压过「命中项目名」——排序就失去意义。
+        f_hits = []
+        for rel in walk_source(adir):
+            if SENSITIVE_PATH_HINT.search(rel):
+                continue            # 敏感路径既不该显示，也不该被检索命中
+            low = rel.lower()
+            got = [t for t in toks if t in low]
+            if got:
+                covered |= set(got)
+                f_hits.append(rel)
+        if f_hits:
+            score += FIND_W["file"] + min(FIND_CAP, len(f_hits) - 1)
+            # 短路径更像「正经源码」，长路径多半是备份/资源目录
+            f_hits.sort(key=lambda x: (len(x), x))
+
+        # 3) 指令原文命中：同样按会话数饱和
+        p_snips = []
+        for s in parse_conversations(adir / META_DIR / CONVERSATIONS_FILE):
+            for pr in s["prompts"]:
+                if not [t for t in toks if t in pr.lower()]:
+                    continue
+                covered |= {t for t in toks if t in pr.lower()}
+                p_snips.append({"kind": "指令", "text": snippet_of(pr, toks),
+                                "session": s["title"], "time": s["time"],
+                                "link": s["link"]})
+                break               # 每个会话最多贡献一条，避免同一项目刷屏
+        if p_snips:
+            score += FIND_W["prompt"] + min(FIND_CAP, len(p_snips) - 1)
+
+        # 4) 摘要只作兜底：它是模型写的，命中它不代表用户真在这里干过
+        purpose = p.get("purpose") or ""
+        if hit_count(purpose, toks):
+            covered |= {t for t in toks if t in purpose.lower()}
+            score += FIND_W["summary"]
+
+        if score > 0 and covered >= need:
+            hits.append({
+                "name": p.get("name") or p.get("dir") or "",
+                "dir": p.get("dir") or "", "workspace": p.get("workspace") or "",
+                "type": p.get("type") or "", "language": p.get("language") or "",
+                "first_dev": p.get("first_dev") or "", "last_dev": p.get("last_dev") or "",
+                "sessions": p.get("sessions", 0), "files": p.get("files", 0),
+                "score": score,
+                "snippets": p_snips[:2] + [{"kind": "文件", "text": rel}
+                                           for rel in f_hits[:2]],
+            })
+
+    # 先按「最后开发」新→旧，再按分数稳排：同分时最近做过的排前面
+    hits.sort(key=lambda x: x.get("last_dev") or "", reverse=True)
+    hits.sort(key=lambda x: -x["score"])
+    strong = [h for h in hits if h["score"] >= FIND_W["file"]]
+    weak = [h for h in hits if h["score"] < FIND_W["file"]]
+    shown = hits if show_all else strong
+    cost = time.time() - t0
+
+    if as_json:
+        print(json.dumps({"query": query, "total": len(hits), "cost_s": round(cost, 3),
+                          "hits": shown}, ensure_ascii=False, indent=2))
+        return 0 if hits else 1
+
+    print()
+    if not hits:
+        print(f"没有命中「{query}」")
+        print("  换个更短的词试试；或先确认归档里有这个项目（archiver.py status）")
+        return 1
+
+    print(f"{len(hits)} 条命中 · 用时 {cost:.2f}s"
+          + (f" · 显示 {len(shown)} 条（弱命中 {len(weak)} 条，加 --all 查看）"
+             if weak and not show_all else ""))
+    for h in shown:
+        print()
+        print(f"{h['name']}  ·  {h['first_dev']} → {h['last_dev']}  ·  评分 {h['score']}")
+        if h["workspace"]:
+            print(f"  工作区  {safe_path_label(h['workspace'])}")
+        for sn in h["snippets"]:
+            if sn["kind"] == "指令":
+                when = (sn.get("time") or "")[:16]
+                print(f"  [指令] {when}  {sn['text']}")
+            else:
+                print(f"  [文件] {_cut(sn['text'], 72)}")
+
+    if weak and not show_all:
+        print()
+        print(f"  另有 {len(weak)} 条弱命中（只命中摘要，未必真在这里干过），"
+              f"加 --all 查看")
+    if not shown:
+        return 0
+
+    top = shown[0]
+    print()
+    if open_it:
+        link = ""
+        for sn in top["snippets"]:
+            if sn.get("link"):
+                link = sn["link"]
+                break
+        if open_session(target / top["dir"], link):
+            print(f"  已打开：{top['name']}")
+        else:
+            adir = target / top["dir"]
+            print(f"  该会话无深链，手动打开：{adir / open_script_name()}")
+    else:
+        print(f"  → 直接回场：archiver.py find \"{query}\" --open")
+    return 0
+
+
+STAT_BLOCKS = "▁▂▃▄▅▆▇█"
+
+
+def human_num(n: int) -> str:
+    """紧凑数字：账本一行要放下四个量，写全 1234567 反而看不清量级。"""
+    n = int(n or 0)
+    if n >= 1_000_000_000:
+        return f"{n / 1_000_000_000:.1f}B"
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}k"
+    return str(n)
+
+
+def _day_list(end: str, n: int) -> list:
+    """最近 n 天（含 end），旧→新。"""
+    d = datetime.strptime(end, "%Y-%m-%d")
+    return [(d - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(n - 1, -1, -1)]
+
+
+def _spark(vals: list) -> str:
+    """迷你柱：一行看完这周哪几天在干活。全零时用 · 占位，别留空白让人以为是截断。"""
+    top = max(vals) if vals else 0
+    if not top:
+        return "·" * len(vals)
+    k = len(STAT_BLOCKS) - 1
+    return "".join(STAT_BLOCKS[max(0, min(k, int(round(v / float(top) * k))))]
+                   if v > 0 else STAT_BLOCKS[0] for v in vals)
+
+
+def _group_label(g: dict) -> str:
+    """项目显示名：目录名；平台时间戳目录则用会话标题（否则一行全是 `2026-11-18-21-34-40`）。"""
+    base = os.path.basename(str(g.get("ws") or "").replace("\\", "/").rstrip("/"))
+    if base and not PLATFORM_DIR_PAT.match(base):
+        return base
+    titles = [s.get("title") for s in g.get("sessions") or [] if s.get("title")]
+    return (pick_title(titles) if titles else "") or base or "—"
+
+
+def cmd_stats(sources=None, days: int = 7, end: str = "", as_json: bool = False) -> int:
+    """跨天账本：最近 N 天做了多少、花在哪儿、哪些项目最活跃。
+
+    只读，零写入，不调模型。**不估算成本**：WorkBuddy 的 `providerData.requestModelName`
+    常为 `auto`，拿默认单价顶替等于编数字——"模型不明就写未记录"是本项目的一条硬规矩。
+    """
+    end = end or datetime.now().strftime("%Y-%m-%d")
+    try:
+        dates = _day_list(end, max(1, min(int(days or 7), 366)))
+    except Exception:
+        print(f"  日期格式应为 YYYY-MM-DD：{end}")
+        return 1
+
+    r = collect_range(dates, sources)
+    if not r.get("ok"):
+        print(f"  {r.get('msg')}")
+        return 1
+
+    groups = [g for g in r["groups"].values() if not g.get("is_ext")]
+    daily = r["daily"]
+    sids = {s["sid"] for g in groups for s in g["sessions"]}
+    tok_in = sum(g["tok"]["in"] for g in groups)
+    tok_out = sum(g["tok"]["out"] for g in groups)
+    tok_cache = sum(g["tok"]["cache_read"] for g in groups)
+    prompts = sum(len(g["prompts"]) for g in groups)
+    files = sum(len(g["files"]) for g in groups)
+    writes = sum(g.get("writes", 0) for g in groups)
+    edits = sum(g.get("edits", 0) for g in groups)
+    hit_rate = (tok_cache / float(tok_in) * 100) if tok_in else 0.0
+    blank = [d["date"] for d in daily if not d["hits"]]
+    ranked = sorted(groups, key=lambda g: (-len(g["prompts"]), -len(g["files"])))
+
+    if as_json:
+        print(json.dumps({
+            "from": dates[0], "to": dates[-1], "days": len(dates),
+            "totals": {"prompts": prompts, "sessions": len(sids),
+                       "projects": len(groups), "files": files,
+                       "writes": writes, "edits": edits,
+                       "tok_in": tok_in, "tok_out": tok_out,
+                       "cache_read": tok_cache,
+                       "cache_rate": round(hit_rate, 1)},
+            "daily": daily,
+            "projects": [{"ws": g["ws"], "name": _group_label(g),
+                          "prompts": len(g["prompts"]), "files": len(g["files"]),
+                          "sessions": len(g["sessions"]),
+                          "tokens": tok_total(g)} for g in ranked],
+            "blank_days": blank,
+        }, ensure_ascii=False, indent=2))
+        return 0
+
+    span = f"{dates[0]} → {dates[-1]}"
+    print()
+    print(f"  最近 {len(dates)} 天 · {span}")
+    print()
+    print(f"  对话 {prompts} · 会话 {len(sids)} · 项目 {len(groups)} · "
+          f"改动文件 {files}（写 {writes} / 改 {edits}）")
+    if tok_in or tok_out:
+        print(f"  Token 输入 {human_num(tok_in)}"
+              f"（缓存命中 {hit_rate:.0f}%）· 输出 {human_num(tok_out)}"
+              f" · 合计 {human_num(tok_in + tok_out)}")
+        print("  成本：不估算（模型归属常为 auto，拿默认单价顶替等于编数字）")
+    else:
+        print("  Token 未记录：这几天的会话没有 usage 字段")
+
+    print()
+    print(f"  每日对话  {_spark([d['prompts'] for d in daily])}")
+    print()
+    print(f"  {_pad('日期', 12)}{_pad('对话', 5, True)}{_pad('项目', 7, True)}"
+          f"{_pad('文件', 7, True)}{_pad('token', 9, True)}")
+    print("  " + "-" * 40)
+    for d in daily:
+        when = d["date"][5:]
+        row = (f"  {_pad(when, 12)}{_pad(d['prompts'], 5, True)}"
+               f"{_pad(d['projects'], 7, True)}{_pad(d['files'], 7, True)}"
+               f"{_pad(human_num(d['tokens']), 9, True)}")
+        # 空白天不额外加标记：全零已经说明问题，补位反而让表格缺一角
+        print(row)
+
+    if ranked:
+        print()
+        print("  最活跃项目")
+        for g in ranked[:8]:
+            label = _cut(_group_label(g), 34)
+            print(f"    {len(g['prompts']):>4} 对话 · {len(g['files']):>3} 文件 · "
+                  f"{human_num(tok_total(g)):>7} tok   {label}")
+
+    if blank:
+        shown = " · ".join(x[5:] for x in blank[:10])
+        more = "" if len(blank) <= 10 else f" 等 {len(blank)} 天"
+        print()
+        print(f"  空白天    {shown}{more}（没有会话）")
+    print()
+    return 0
+
+
+# ---------------------------------------------------------------- report (HTML)
+#
+# 单文件、零脚本、零网络请求：报告是要发出去的（贴群、发推、当首屏截图），
+# 任何一处外链都会在别人机器上变成空白或白屏。
+# 同时默认**不含工作区路径、不含指令原文**——"能分享"和"敢分享"是两件事。
+
+REPORT_PROJECTS_MAX = 40       # 卡片上限：再多就变成另一个 INDEX.md，没人往下滚
+REPORT_HEAT_MIN_DAYS = 10      # 少于 10 天不画热力图：一个格子的日历没有意义
+
+
+def report_label(g: dict) -> str:
+    """报告里的项目名。要发出去，所以先脱敏再判敏感；命中的宁可不显示。"""
+    name = desensitize(_group_label(g) or "")
+    name = " ".join(name.split())
+    if not name:
+        return "（未命名项目）"
+    if SENSITIVE_TEXT_HINT.search(name) or \
+            SENSITIVE_PATH_HINT.search(name.replace("\\", "/")):
+        return "（名称含敏感信息，已隐藏）"
+    return name[:36]
+
+
+def _rep(s, n: int = 0) -> str:
+    """HTML 转义 + 可选截断。报告里每一段动态文本都必须过这里。"""
+    t = " ".join(str(s or "").split())
+    if n and len(t) > n:
+        t = t[:n].rstrip(" ，。,.、;；:：") + "…"
+    return _html.escape(t, quote=True)
+
+
+def _heat_level(v: int, top: int) -> int:
+    if not v or not top:
+        return 0
+    r = v / float(top)
+    if r <= 0.25:
+        return 1
+    if r <= 0.5:
+        return 2
+    if r <= 0.75:
+        return 3
+    return 4
+
+
+def _rep_heat(daily: list) -> str:
+    """日历热力格。按周排（7 行），首日前的空格补齐到它真实的星期位置。"""
+    if not daily:
+        return ""
+    top = max(d["prompts"] for d in daily) or 0
+    try:
+        offset = datetime.strptime(daily[0]["date"], "%Y-%m-%d").weekday()
+    except Exception:
+        offset = 0
+    cells = ['<i class="blank"></i>'] * offset
+    for d in daily:
+        lv = _heat_level(d["prompts"], top)
+        tip = _html.escape(
+            f"{d['date']} · 对话 {d['prompts']} · 文件 {d['files']} · "
+            f"{human_num(d['tokens'])} tok", quote=True)
+        cells.append(f'<i class="h{lv}" title="{tip}"></i>')
+    return '<div class="heat">' + "".join(cells) + "</div>"
+
+
+def _rep_bars(daily: list, w: int = 720, h: int = 104) -> str:
+    """每日对话量。用内联 SVG 而不是 div：高度是数据，不能让布局参与计算。"""
+    if not daily:
+        return ""
+    top = max(d["prompts"] for d in daily) or 0
+    slot = w / float(len(daily))
+    bw = max(2.0, min(20.0, slot * 0.64))
+    rects = []
+    for i, d in enumerate(daily):
+        v = d["prompts"]
+        bh = ((h - 2) * v / float(top)) if top else 0.0
+        x = i * slot + (slot - bw) / 2.0
+        tip = _html.escape(f"{d['date']} · 对话 {v} · 文件 {d['files']} · "
+                           f"{human_num(d['tokens'])} tok", quote=True)
+        rects.append(f'<rect x="{x:.1f}" y="{h - bh:.1f}" width="{bw:.1f}" '
+                     f'height="{max(bh, 1.6):.1f}" rx="1.2"><title>{tip}</title></rect>')
+    return (f'<svg viewBox="0 0 {w} {h}" role="img" aria-label="每日对话量">'
+            f'<line x1="0" y1="{h}" x2="{w}" y2="{h}" class="base"/>'
+            + "".join(rects) + "</svg>")
+
+
+def _rep_facts(daily: list, horizontal: bool = False) -> str:
+    """热力图旁边的三条事实。热力图只说"哪几天忙"，说不出"忙到什么程度"。
+
+    区间太短时热力图没有意义（一个格子不构成日历），改用横排三卡。
+    """
+    if not daily:
+        return ""
+    top = max(daily, key=lambda d: d["prompts"])
+    n = len(daily)
+    total = sum(d["prompts"] for d in daily)
+    active = sum(1 for d in daily if d["hits"])
+    rows = [
+        ("最忙的一天", f"{top['date']} · {top['prompts']} 条"),
+        ("活跃天数", f"{active} / {n} 天"),
+        ("平均每天", f"{total / float(n):.1f} 条对话"),
+    ]
+    cls = "facts h" if horizontal else "facts"
+    return f'<dl class="{cls}">' + "".join(
+        f'<div><dt>{k}</dt><dd>{_rep(v, 30)}</dd></div>' for k, v in rows) + "</dl>"
+
+
+def _rep_projects(projects: list) -> str:
+    if not projects:
+        return '<p class="empty">这段时间没有记录到开发活动。</p>'
+    top = max(p["prompts"] for p in projects) or 0
+    out = []
+    for p in projects[:REPORT_PROJECTS_MAX]:
+        pct = (p["prompts"] / float(top) * 100.0) if top else 0.0
+        span = p["first"] if p["first"] == p["last"] else f"{p['first']} → {p['last']}"
+        meta = (f"{p['sessions']} 会话 · {p['files']} 文件 · "
+                f"{human_num(p['tokens'])} tok · {span}")
+        out.append('<li><div class="prow">'
+                   f'<span class="pn">{_rep(p["name"], 44)}</span>'
+                   f'<span class="pv">{p["prompts"]}</span></div>'
+                   f'<div class="pbar"><i style="width:{pct:.1f}%"></i></div>'
+                   f'<div class="pm">{_rep(meta, 96)}</div></li>')
+    tail = ""
+    if len(projects) > REPORT_PROJECTS_MAX:
+        tail = (f'<p class="empty">另有 {len(projects) - REPORT_PROJECTS_MAX} 个项目未展开'
+                f'（共 {len(projects)} 个）</p>')
+    return '<ul class="proj">' + "".join(out) + "</ul>" + tail
+
+
+def report_data(sources=None, days: int = 30, end: str = "") -> dict:
+    """报告的输入数据。和 stats 共用 collect_range——同一份口径，不另算一遍。"""
+    end = end or datetime.now().strftime("%Y-%m-%d")
+    try:
+        dates = _day_list(end, max(1, min(int(days or 30), 366)))
+    except Exception:
+        return {"ok": False, "msg": f"日期格式应为 YYYY-MM-DD：{end}"}
+
+    r = collect_range(dates, sources)
+    if not r.get("ok"):
+        return {"ok": False, "msg": r.get("msg") or "聚合失败"}
+
+    groups = [g for g in r["groups"].values() if not g.get("is_ext")]
+    daily = r["daily"]
+    sids = {s["sid"] for g in groups for s in g["sessions"]}
+    tok_in = sum(g["tok"]["in"] for g in groups)
+    tok_out = sum(g["tok"]["out"] for g in groups)
+    tok_cache = sum(g["tok"]["cache_read"] for g in groups)
+    ranked = sorted(groups, key=lambda g: (-len(g["prompts"]), -len(g["files"]),
+                                           report_label(g)))
+    projects = [{
+        "name": report_label(g),
+        "prompts": len(g["prompts"]),
+        "files": len(g["files"]),
+        "sessions": len(g["sessions"]),
+        "tokens": tok_total(g),
+        "first": day(g.get("first")) if g.get("first") else "",
+        "last": day(g.get("last")) if g.get("last") else "",
+    } for g in ranked]
+
+    return {
+        "ok": True, "from": dates[0], "to": dates[-1], "days": len(dates),
+        "totals": {
+            "prompts": sum(p["prompts"] for p in projects),
+            "sessions": len(sids),
+            "projects": len(projects),
+            "files": sum(len(g["files"]) for g in groups),
+            "writes": sum(g.get("writes", 0) for g in groups),
+            "edits": sum(g.get("edits", 0) for g in groups),
+            "tok_in": tok_in, "tok_out": tok_out,
+            "cache_read": tok_cache,
+            "cache_rate": (tok_cache / float(tok_in) * 100.0) if tok_in else 0.0,
+        },
+        "daily": daily, "projects": projects,
+        "blank": [d["date"] for d in daily if not d["hits"]],
+    }
+
+
+REPORT_CSS = """
+*{box-sizing:border-box}
+:root{
+  --bg:#fbfaf8;--card:#fff;--ink:#15171c;--muted:#767b86;--line:#e8e5df;--acc:#0f766e;
+  --h0:#efece6;--h1:#cfe4df;--h2:#9bc9c1;--h3:#4fa79b;--h4:#0f766e;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#0f1115;--card:#161a20;--ink:#e9ebef;--muted:#8d94a0;--line:#242a33;
+        --acc:#2dd4bf;--h0:#1d232b;--h1:#1e3b3a;--h2:#245a56;--h3:#2b7f77;--h4:#2dd4bf}
+}
+body{margin:0;background:var(--bg);color:var(--ink);
+     font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",
+          "Hiragino Sans GB","Microsoft YaHei",sans-serif;
+     -webkit-font-smoothing:antialiased}
+main{max-width:760px;margin:0 auto;padding:56px 24px 44px}
+.eyebrow{margin:0 0 10px;font-size:11px;letter-spacing:.18em;text-transform:uppercase;
+         color:var(--muted)}
+h1{margin:0 0 8px;font-size:34px;line-height:1.2;letter-spacing:-.01em}
+.sub{margin:0;font-size:13px;color:var(--muted)}
+.kpi{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);
+     border:1px solid var(--line);border-radius:12px;overflow:hidden;margin:32px 0 0}
+.kpi div{background:var(--card);padding:15px 14px}
+.kv{display:block;font-size:23px;font-weight:600;letter-spacing:-.02em;
+    font-variant-numeric:tabular-nums}
+.kl{display:block;margin-top:2px;font-size:11px;color:var(--muted)}
+section{margin-top:40px}
+h2{margin:0 0 14px;font-size:11px;font-weight:600;letter-spacing:.12em;
+   text-transform:uppercase;color:var(--muted)}
+.heat{display:grid;grid-auto-flow:column;grid-auto-columns:17px;
+      grid-template-rows:repeat(7,17px);gap:4px}
+.heat i{display:block;width:17px;height:17px;border-radius:3px;background:var(--h0)}
+.heat i.blank{background:transparent}
+.heat i.h1{background:var(--h1)}.heat i.h2{background:var(--h2)}
+.heat i.h3{background:var(--h3)}.heat i.h4{background:var(--h4)}
+.split{display:grid;grid-template-columns:auto 1fr;gap:28px;align-items:center}
+.cap{margin:8px 0 0;font-size:11px;color:var(--muted)}
+.facts{display:grid;gap:9px;margin:0}
+.facts div{display:flex;justify-content:space-between;gap:14px;padding-bottom:8px;
+           border-bottom:1px dashed var(--line);font-size:12.5px}
+.facts div:last-child{border-bottom:0;padding-bottom:0}
+.facts dt{color:var(--muted)}
+.facts dd{margin:0;font-variant-numeric:tabular-nums}
+.facts.h{grid-template-columns:repeat(3,1fr);gap:18px}
+.facts.h div{display:block;padding-bottom:0;border-bottom:0}
+.facts.h dt{margin-bottom:3px}
+.facts.h dd{font-size:17px;font-weight:600;color:var(--ink)}
+.chart{color:var(--acc)}
+.chart svg{display:block;width:100%;height:auto}
+.chart rect{fill:currentColor;opacity:.82}
+.chart .base{stroke:var(--line);stroke-width:1;fill:none}
+.axis{display:flex;justify-content:space-between;margin-top:8px;font-size:11px;
+      color:var(--muted);font-variant-numeric:tabular-nums}
+.proj{list-style:none;margin:0;padding:0;display:grid;gap:16px}
+.prow{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.pn{font-weight:500;overflow-wrap:anywhere}
+.pv{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+.pbar{height:4px;margin:7px 0 6px;border-radius:2px;background:var(--h0);overflow:hidden}
+.pbar i{display:block;height:100%;border-radius:2px;background:var(--acc)}
+.pm{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.empty{margin:14px 0 0;font-size:12px;color:var(--muted)}
+footer{display:flex;flex-wrap:wrap;gap:10px 18px;justify-content:space-between;
+       margin-top:52px;padding-top:18px;border-top:1px solid var(--line);
+       font-size:12px;color:var(--muted)}
+footer a{color:inherit;text-decoration:none;border-bottom:1px solid var(--line)}
+@media (max-width:560px){
+  main{padding:36px 18px 32px}h1{font-size:27px}
+  .kpi{grid-template-columns:repeat(2,1fr)}
+  .split{grid-template-columns:1fr;gap:20px}
+}
+"""
+
+
+def build_report_html(d: dict) -> str:
+    """把 report_data 变成一份自包含的 HTML。纯函数：同样输入 → 逐字节相同。"""
+    t = d["totals"]
+    span = f"{d['from']} → {d['to']}"
+    tok_all = t["tok_in"] + t["tok_out"]
+    kpis = [
+        (human_num(t["prompts"]), "条对话"),
+        (str(t["projects"]), "个项目"),
+        (str(t["files"]), "个改动文件"),
+        (human_num(tok_all) if tok_all else "—", "token"),
+    ]
+    kpi_html = "".join(f'<div><span class="kv">{_rep(v, 12)}</span>'
+                       f'<span class="kl">{_rep(k, 12)}</span></div>'
+                       for v, k in kpis)
+
+    notes = []
+    if t["tok_in"]:
+        notes.append(f"输入 {human_num(t['tok_in'])}"
+                     f"（缓存命中 {t['cache_rate']:.0f}%）· 输出 {human_num(t['tok_out'])}")
+        notes.append("Token 只统计、不折算成本：模型归属常为 auto，"
+                     "按默认单价算等于编数字")
+    else:
+        notes.append("Token 未记录：这些会话没有 usage 字段")
+    if d["blank"]:
+        notes.append(f"其中 {len(d['blank'])} 天没有会话")
+    note_html = "".join(f'<p class="empty">{_rep(x, 120)}</p>' for x in notes)
+
+    # 短区间不画热力图：一个格子的"日历"只会让人以为页面坏了
+    if len(d["daily"]) >= REPORT_HEAT_MIN_DAYS:
+        activity = (f'<div class="split"><div>{_rep_heat(d["daily"])}'
+                    f'<p class="cap">每格一天，颜色越深对话越多</p></div>'
+                    f'{_rep_facts(d["daily"])}</div>')
+    else:
+        activity = _rep_facts(d["daily"], horizontal=True)
+
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI 开发账本 · {_rep(span, 40)}</title>
+<style>{REPORT_CSS}</style>
+</head>
+<body>
+<main>
+<header>
+  <p class="eyebrow">AI 开发账本</p>
+  <h1>最近 {d['days']} 天</h1>
+  <p class="sub">{_rep(span, 40)} · {t['sessions']} 个会话 · {t['writes']} 次写、{t['edits']} 次改</p>
+</header>
+<section class="kpi">{kpi_html}</section>
+<section>
+  <h2>每天的活跃度</h2>
+  {activity}
+  {note_html}
+</section>
+<section>
+  <h2>每日对话量</h2>
+  <div class="chart">{_rep_bars(d['daily'])}</div>
+  <div class="axis"><span>{_rep(d['from'], 10)}</span><span>{_rep(d['to'], 10)}</span></div>
+</section>
+<section>
+  <h2>项目（按对话量）</h2>
+  {_rep_projects(d['projects'])}
+</section>
+<footer>
+  <span>由 <a href="https://github.com/winrich/dev-project-archivist">
+  dev-project-archivist</a> 生成 · 数据来自本机对话转录，未上传任何内容</span>
+  <span>不含工作区路径与指令原文</span>
+</footer>
+</main>
+</body>
+</html>
+"""
+
+
+def cmd_report(target: Path, sources=None, days: int = 30, end: str = "",
+               out: str = "", open_it: bool = False) -> int:
+    """写一份单文件 HTML 账本（可截图、可直接发人）。只写这一个文件。"""
+    d = report_data(sources, days=days, end=end)
+    if not d.get("ok"):
+        print(f"  {d.get('msg')}")
+        return 1
+
+    text = build_report_html(d)
+    out_dir = Path(out) if out else (target / "report")
+    path = out_dir / f"report-{d['from']}_{d['to']}.html"
+    atomic_write(path, text)
+
+    print(f"已写入 {path}")
+    total_tok = d["totals"]["tok_in"] + d["totals"]["tok_out"]
+    print(f"  {d['days']} 天 · {d['totals']['projects']} 个项目 · "
+          f"{d['totals']['prompts']} 条对话 · "
+          + (f"{human_num(total_tok)} token" if total_tok else "Token 未记录"))
+    print("  报告不含工作区路径与指令原文，可直接分享")
+    if open_it:
+        try:
+            webbrowser.open(path.resolve().as_uri())
+        except Exception:
+            print("  打开失败，请手动打开上面的路径")
+    return 0
+
+
+def _force_rmtree(p: Path):
+    """删目录，绕过 Windows 的只读属性。
+
+    git 在 Windows 上会把 .git/objects 下的对象文件标成只读，`shutil.rmtree` 直接抛
+    PermissionError（WinError 5），导致 `git-clean` 一个都重建不了。先 chmod 再删。
+    """
+    def on_err(func, path, exc):
+        try:
+            os.chmod(path, 0o700)
+            func(path)
+        except Exception:
+            raise
+    shutil.rmtree(str(p), onerror=on_err)
 
 
 def cmd_git_clean(target: Path):
     """重建由归档器创建的 git 仓库，清掉历史提交里的大对象。
 
-    只在所有提交信息均由归档器产生（init: 归档 / sync: 同步）时才重建，
-    避免破坏用户自己的提交历史。
+    只在历史提交全部由归档器产生时才重建（判据是提交体里的 ARCHIVER_TRAILER，
+    旧版本提交按 LEGACY_PREFIX 兼容），避免破坏用户自己的提交历史。
     """
-    import subprocess
     state = State(target)
     done = skip = 0
     for k, st in state.data["projects"].items():
@@ -2316,19 +3602,12 @@ def cmd_git_clean(target: Path):
         gitdir = adir / ".git"
         if not adir.exists() or not gitdir.exists():
             continue
-        try:
-            r = subprocess.run(["git", "log", "--format=%s"], cwd=str(adir),
-                               capture_output=True, text=True, timeout=60,
-                               encoding="utf-8", errors="replace")
-            msgs = [m for m in (r.stdout or "").splitlines() if m.strip()]
-        except Exception:
-            msgs = []
-        if msgs and not all(m.startswith(("init: 归档", "sync: 同步")) for m in msgs):
+        if not archiver_commits_only(adir):
             print(f"  跳过（含人工提交）：{st['dir']}")
             skip += 1
             continue
         try:
-            shutil.rmtree(gitdir)
+            _force_rmtree(gitdir)
         except Exception as e:
             print(f"  失败：{st['dir']} {e}")
             skip += 1
@@ -2340,11 +3619,1315 @@ def cmd_git_clean(target: Path):
     return 0
 
 
+# ================================================================ 按日恢复
+#
+# 语义先说清楚（README 里写的是同一段话，改这里记得同步）：
+#
+#   1. 恢复源只有一个：**各归档仓库自己的 git 历史**。
+#      也就是「之前确实归档过的那一天」能回来；归档器从没抓进来的东西回不来——
+#      媒体、超过体积上限被剔除的二进制、敏感路径、.gitignore 排除的构建产物，
+#      以及**首次归档之前**的任何文件。它们从来没进过 git，凭空变不出来。
+#   2. 恢复出来的是「那天结束时归档长什么样」，不是「那天改了什么」。
+#      某天没跑归档，那天的快照就不存在，取到的是**更早的最近一次**提交，
+#      界面上会把那个提交的真实时间打出来，不假装是当天。
+#   3. **永远不写回归档目录**。产物落在 <target>/_restore/<date>/<项目>/。
+#      「回到某天」最典型的翻车方式就是覆盖当前归档，这里从根上不给这个机会：
+#      恢复只读归档仓库，写入点是一个当天新建的独立目录。
+#
+# 为什么用 `git archive` 而不是 `git checkout -- .`：
+#   checkout 会动工作区和索引，可能把当前归档搞成 detached HEAD、覆盖未提交的
+#   手工改动；`git archive` 只读对象库，连工作区都不碰。
+
+RESTORE_DIR = "_restore"
+RESTORE_MAX_MB = 800            # 单次恢复总量上限，超过要 --force：几百 MB 的意外没人想要
+
+
+def _git_run(adir: Path, args: list, timeout: int = 120, binary: bool = False):
+    """在归档仓库里跑一条 git 命令。返回 (returncode, stdout, stderr)。
+
+    统一走这里，是为了让"仓库不存在/没有 git/命令超时"三种失败都只表现为
+    一个非零返回码，调用方不必到处写 try（这些仓库是工具自己建的，出错时
+    需要的是一条能看懂的提示，而不是异常栈）。
+    """
+    import subprocess
+    try:
+        r = subprocess.run(["git"] + args, cwd=str(adir), capture_output=True,
+                           timeout=timeout,
+                           text=not binary,
+                           encoding=None if binary else "utf-8",
+                           errors=None if binary else "replace")
+        out = r.stdout if binary else (r.stdout or "")
+        err = r.stderr if binary else (r.stderr or "")
+        return r.returncode, out, err
+    except Exception as e:
+        return 1, (b"" if binary else ""), str(e)
+
+
+def git_commit_at(adir: Path, until_ts: int) -> dict:
+    """仓库在 until_ts（含）之前的最后一个提交，没有则返回 {}。
+
+    返回 {"sha", "ts", "subject", "first_ts"}。
+
+    为什么自己比时间戳、不用 `git log --until=2026-11-15`：
+    `--until` 按提交里的时区偏移解释边界，用户机器在 UTC+8、归档器提交带 +0800，
+    而 git 内部存的是 UTC——跨时区或夏令时地区，边界那一次提交会被判到隔壁天。
+    这里统一换算成本地 Unix 秒再比，口径只有一个。
+    """
+    if not (adir / ".git").exists():
+        return {}
+    rc, out, _ = _git_run(adir, ["log", "--format=%H %ct"], timeout=60)
+    if rc != 0:
+        return {}
+    rows = []
+    for line in (out or "").splitlines():
+        parts = line.strip().split()
+        if len(parts) != 2:
+            continue
+        try:
+            rows.append((parts[0], int(parts[1])))
+        except ValueError:
+            continue
+    if not rows:
+        return {}
+    first_ts = rows[-1][1]          # git log 是新的在前，最后一行的才是首次提交
+    for sha, ts in rows:
+        if ts <= until_ts:
+            return {"sha": sha, "ts": ts, "first_ts": first_ts,
+                    "subject": git_subject(adir, sha)}
+    return {"sha": "", "ts": 0, "first_ts": first_ts, "subject": ""}
+
+
+def git_subject(adir: Path, sha: str) -> str:
+    """提交标题（首行）。恢复界面上要显示它：让人一眼认出回到的是哪一版。"""
+    rc, out, _ = _git_run(adir, ["log", "-1", "--format=%s", sha], timeout=30)
+    return (out or "").strip().replace("\n", " ")[:72] if rc == 0 else ""
+
+
+def git_tree_files(adir: Path, sha: str) -> list:
+    """该提交里的文件清单 [(相对路径, 字节数)]。
+
+    只用 `git ls-tree`（读树对象，不解压），所以「先看要恢复多少」的成本是毫秒级。
+    """
+    rc, out, _ = _git_run(adir, ["ls-tree", "-r", "-l", "--full-tree", sha], timeout=120)
+    if rc != 0:
+        return []
+    files = []
+    for line in (out or "").splitlines():
+        meta, _, rel = line.partition("\t")
+        parts = meta.split()
+        if len(parts) < 4 or parts[1] != "blob" or not rel:
+            continue                # 子模块是 commit 项，不是文件，跳过
+        try:
+            size = int(parts[3])
+        except ValueError:
+            size = 0
+        files.append((rel, size))
+    return files
+
+
+def git_export(adir: Path, sha: str, dest: Path) -> dict:
+    """把某个提交的整棵树展开到 dest（目录需不存在或为空）。
+
+    走 `git archive` → 临时 tar → tarfile 流式解包：不碰工作区、不碰索引。
+    解包逐个成员检查，拒绝绝对路径与 `..`——git 本身不会产生这种条目，
+    但恢复命令是"把旧数据写到现在"，路径穿越这一层不能靠上游保证。
+    """
+    import tarfile
+    import tempfile
+    tmpdir = tempfile.mkdtemp(prefix="dpa-restore-")
+    try:
+        tarp = Path(tmpdir) / "snapshot.tar"
+        rc, _, err = _git_run(adir, ["archive", "--format=tar", "-o", str(tarp), sha],
+                              timeout=1800)
+        if rc != 0 or not tarp.exists():
+            return {"ok": False, "msg": (err or "git archive 失败").strip()[:200]}
+        dest.mkdir(parents=True, exist_ok=True)
+        n = total = 0
+        with tarfile.open(str(tarp), "r:") as tf:
+            for m in tf:
+                rel = m.name.replace("\\", "/")
+                pp = PurePosixPath(rel)
+                if pp.is_absolute() or ".." in pp.parts:
+                    continue
+                if not (m.isfile() or m.isdir()):
+                    continue            # 软链/设备文件不还原：快照里也用不上
+                m.name = rel
+                try:
+                    tf.extract(m, str(dest), filter="data")     # Python 3.12+
+                except TypeError:
+                    tf.extract(m, str(dest))                    # 3.8–3.11 没有 filter
+                if m.isfile():
+                    n += 1
+                    total += int(m.size or 0)
+        return {"ok": True, "files": n, "bytes": total}
+    except Exception as e:
+        return {"ok": False, "msg": str(e)[:200]}
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def archive_dirs(target: Path) -> list:
+    """归档目录下所有带 .git 的项目目录。
+
+    `_`/`.` 开头的跳过：`_restore`、`_meta`、`_evidence` 都不是项目，
+    把它们当仓库恢复只会让人以为归档里有 30 个项目。
+    """
+    if not target.exists():
+        return []
+    out = [p for p in target.iterdir()
+           if p.is_dir() and not p.name.startswith(("_", "."))
+           and (p / ".git").exists()]
+    out.sort(key=lambda p: p.name.lower())
+    return out
+
+
+def restore_dates(target: Path, limit: int = 20) -> list:
+    """所有归档仓库有提交的本地日期（新→旧）：[(日期, 仓库数, 提交数)]。
+
+    没有 `--date` 时先把这张表打出来。用户问不出「能回到哪天」的时候，
+    让他自己去 `git log` 27 次是不合理的。
+    """
+    seen = {}
+    for adir in archive_dirs(target):
+        rc, out, _ = _git_run(adir, ["log", "--format=%ct"], timeout=60)
+        if rc != 0:
+            continue
+        for line in (out or "").splitlines():
+            try:
+                ts = int(line.strip())
+            except ValueError:
+                continue
+            d = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+            rec = seen.setdefault(d, {"repos": set(), "commits": 0})
+            rec["repos"].add(adir.name)
+            rec["commits"] += 1
+    rows = [(d, len(v["repos"]), v["commits"]) for d, v in seen.items()]
+    rows.sort(key=lambda x: x[0], reverse=True)
+    return rows[:limit]
+
+
+def cmd_restore(target: Path, date_str: str = "", only: str = "", out: str = "",
+                write: bool = False, force: bool = False, as_json: bool = False) -> int:
+    """把归档恢复到某一天的结束状态（副本形式，不覆盖现有归档）。
+
+    默认**只预览不落盘**：恢复动辄几百 MB，先看清"要拿回哪一版、多少文件"
+    再决定，比事后找个地方删掉那些目录便宜得多。加 `--write` 才真正展开。
+    """
+    if not date_str:
+        rows = restore_dates(target)
+        if not rows:
+            print("  还没有可恢复的快照：归档目录下没有带 git 历史（.git）的项目")
+            print(f"  归档目录：{target}")
+            return 1
+        print()
+        print("  可恢复的日期（各归档仓库有提交的日子，新 → 旧）")
+        print()
+        for d, nrepos, ncommits in rows[:14]:
+            print(f"    {d}   {nrepos:>3} 个仓库有提交 · {ncommits:>4} 次提交")
+        if len(rows) > 14:
+            print(f"    … 另 {len(rows) - 14} 天")
+        print()
+        print("  用法：restore --date 2026-11-18          只预览，不写任何文件")
+        print("        restore --date 2026-11-18 --write  展开到 <target>/_restore/2026-11-18/")
+        print("  说明：只能回到「那天确实归档过」的最近一次快照；")
+        print("        归档器从没抓过的文件（媒体/超大二进制/敏感路径/首次归档之前）不在快照里。")
+        print()
+        return 1
+
+    try:
+        d0 = datetime.strptime(date_str, "%Y-%m-%d")
+    except Exception:
+        print(f"  日期格式应为 YYYY-MM-DD：{date_str}")
+        return 1
+    # 当天 23:59:59 的本地时间戳：恢复的是"这一天结束时"的状态
+    end_ts = int(datetime(d0.year, d0.month, d0.day, 23, 59, 59).timestamp())
+
+    dirs = archive_dirs(target)
+    if not dirs:
+        print("  归档目录下没有带 git 历史的项目，无法恢复")
+        print(f"  归档目录：{target}")
+        return 1
+
+    kw = (only or "").lower()
+    rows, skipped = [], []
+    for adir in dirs:
+        if kw and kw not in adir.name.lower():
+            continue
+        c = git_commit_at(adir, end_ts)
+        if not c or not c["sha"]:
+            first = c.get("first_ts") or 0
+            skipped.append({
+                "dir": adir.name,
+                "reason": (f"该日之前没有归档记录（首次归档 {day(first)}）" if first
+                           else "仓库里没有提交"),
+            })
+            continue
+        files = git_tree_files(adir, c["sha"])
+        rows.append({
+            "dir": adir.name, "sha": c["sha"], "ts": c["ts"],
+            "when": iso(c["ts"]),
+            "subject": c["subject"], "files": len(files),
+            "bytes": sum(s for _, s in files),
+        })
+
+    rows.sort(key=lambda r: -r["bytes"])
+    total_files = sum(r["files"] for r in rows)
+    total_bytes = sum(r["bytes"] for r in rows)
+
+    # 一个都恢复不了就别建空目录：留下一个只有 _restore.md 的日期文件夹，
+    # 下次进来的人会以为"那天归档过、只是没内容"，事实是那天什么都没归档。
+    if not rows:
+        print()
+        if kw:
+            print(f"  没有项目匹配 --only {only}")
+        else:
+            print(f"  {date_str} 之前没有任何项目有归档快照")
+            if skipped:
+                print(f"    {len(skipped)} 个仓库都还没有提交：{skipped[0]['reason']}")
+            print("  换个更晚的日期，或不带 --date 看可恢复的日期")
+        print()
+        return 1
+
+    if as_json:
+        print(json.dumps({
+            "date": date_str, "preview": not write,
+            "restored": rows,
+            "skipped": skipped,
+            "totals": {"projects": len(rows), "files": total_files, "bytes": total_bytes},
+        }, ensure_ascii=False, indent=2))
+        if not write:
+            return 0
+
+    else:
+        print()
+        print(f"  归档快照 {date_str}（当天 23:59:59 之前最后一次提交）")
+        print(f"  {'预览，未写任何文件' if not write else '恢复到 ' + str(Path(out or (target / RESTORE_DIR)) / date_str)}")
+        print()
+        if rows:
+            print(f"  {_pad('项目', 30)}{_pad('快照时间', 18)}"
+                  f"{_pad('文件', 7, True)}{_pad('体积', 10, True)}")
+            print("  " + "-" * 66)
+            for r in rows:
+                print(f"  {_pad(_cut(r['dir'], 30), 30)}{_pad(r['when'][5:16], 18)}"
+                      f"{_pad(r['files'], 7, True)}{_pad(human_size(r['bytes']), 10, True)}")
+            print()
+            print(f"  小计 {len(rows)} 个项目 · {total_files} 个文件 · "
+                  f"{human_size(total_bytes)}")
+            print()
+            for r in rows[:8]:
+                print(f"    {_cut(r['dir'], 26):28} {r['sha'][:8]}  {_cut(r['subject'], 46)}")
+            if len(rows) > 8:
+                print(f"    … 另 {len(rows) - 8} 个，--json 看全部")
+        else:
+            print("  这一天没有任何项目有快照")
+        if skipped:
+            print()
+            print(f"  无法恢复 {len(skipped)} 个")
+            for s in skipped[:8]:
+                print(f"    {_pad(_cut(s['dir'], 26), 28)}{s['reason']}")
+            if len(skipped) > 8:
+                print(f"    … 另 {len(skipped) - 8} 个")
+
+    if not write:
+        print()
+        print("  这只是预览。加 --write 才会展开成副本（不会改动归档本身）：")
+        print(f"    restore --date {date_str} --write")
+        print()
+        return 0
+
+    if total_bytes > RESTORE_MAX_MB * 1024 * 1024 and not force:
+        print()
+        print(f"  拒绝执行：这一次要展开 {human_size(total_bytes)}，"
+              f"超过上限 {RESTORE_MAX_MB}MB")
+        print("  换个更近的日期，或加 --force 明确接受这个体积")
+        return 2
+
+    base = Path(out) if out else (target / RESTORE_DIR)
+    dest_root = base / date_str
+    if dest_root.exists() and any(dest_root.iterdir()) and not force:
+        print()
+        print(f"  目标目录已有内容：{dest_root}")
+        print("  换 --out，或加 --force 覆盖（只覆盖 _restore 下的副本，不碰归档）")
+        return 2
+
+    done, failed = [], []
+    print()
+    for r in rows:
+        dest = dest_root / r["dir"]
+        if dest.exists():
+            _force_rmtree(dest)          # 仅 _restore 下的副本，归档原文不动
+        res = git_export(target / r["dir"], r["sha"], dest)
+        if res.get("ok"):
+            r["got_files"] = res["files"]
+            done.append(r)
+        else:
+            failed.append((r["dir"], res.get("msg") or "解包失败"))
+        print(f"  {'✓' if res.get('ok') else '✗'} {_pad(_cut(r['dir'], 30), 30)}"
+              f"{r['files']:>6} 个文件")
+
+    idx = build_restore_index(date_str, done, skipped, failed)
+    atomic_write(dest_root / "_restore.md", idx)
+    atomic_write(dest_root / "_restore.json", json.dumps({
+        "date": date_str, "generated_by": "dev-project-archivist",
+        "projects": [{"dir": r["dir"], "commit": r["sha"], "snapshot_at": r["when"],
+                      "files": r["files"], "bytes": r["bytes"]} for r in done],
+        "skipped": skipped,
+        "failed": [{"dir": d, "msg": m} for d, m in failed],
+    }, ensure_ascii=False, indent=2))
+
+    print()
+    print(f"  已恢复 {len(done)} 个项目到 {dest_root}")
+    print(f"    文件 {sum(r.get('got_files', 0) for r in done)} 个 · "
+          f"{human_size(sum(r['bytes'] for r in done))}")
+    if failed:
+        print(f"    失败 {len(failed)} 个：" + "、".join(d for d, _ in failed[:5]))
+    print("    这是副本：归档目录本身没有被修改")
+    print()
+    return 0
+
+
+def build_restore_index(date_str: str, done: list, skipped: list, failed: list) -> str:
+    """恢复目录里的 README：说明每个项目来自哪个提交，以及哪些拿不回来。
+
+    给人看的，所以把「这不是那天的改动，而是那天结束时的样子」写在最前面——
+    两者混为一谈，是这类工具最容易被误会的地方。
+    """
+    L = [f"# 归档快照 {date_str}", "",
+         f"> 由 dev-project-archivist `restore` 生成。内容取自各归档仓库在 "
+         f"{date_str} 23:59:59 之前**最后一次提交**。", "",
+         "> 注意两点：这是「那天结束时归档里长什么样」，不是「那天改了什么」；",
+         "> 只有之前归档过的东西才在这里——媒体、超大二进制、敏感路径、",
+         "> .gitignore 排除的构建产物，以及首次归档之前的文件，从来不在快照里。", ""]
+    if done:
+        L += ["| 项目 | 快照时间 | 提交 | 文件 | 体积 |", "|---|---|---|---|---|"]
+        for r in done:
+            L.append(f"| {r['dir']} | {r['when']} | `{r['sha'][:8]}` "
+                     f"{md_cell(r['subject'], 48)} | {r['files']} | "
+                     f"{human_size(r['bytes'])} |")
+        L.append("")
+        L.append(f"合计 {len(done)} 个项目 · "
+                 f"{sum(r['files'] for r in done)} 个文件 · "
+                 f"{human_size(sum(r['bytes'] for r in done))}")
+        L.append("")
+    if skipped:
+        L += ["## 该日之前没有归档记录", ""]
+        L += [f"- **{s['dir']}** — {s['reason']}" for s in skipped]
+        L.append("")
+    if failed:
+        L += ["## 恢复失败", ""]
+        L += [f"- **{d}** — {m}" for d, m in failed]
+        L.append("")
+    L += ["---", "",
+          f"回退本身不需要这个副本：归档仓库自带完整历史，"
+          f"在任一项目目录里 `git log` / `git checkout <sha> -- .` 即可。", ""]
+    return "\n".join(L)
+
+
+# ================================================================ 日维度聚合
+def day_range_ms(date_str: str):
+    """本地日期 → [起, 止) 毫秒区间，用于从会话元数据粗筛候选，避免全量解析。"""
+    d = datetime.strptime(date_str, "%Y-%m-%d")
+    start = datetime(d.year, d.month, d.day)
+    return int(start.timestamp() * 1000), int((start + timedelta(days=1)).timestamp() * 1000)
+
+
+def to_ms(v):
+    """秒 / 毫秒 / ISO 字符串统一成毫秒整数；拿不到返回 None。"""
+    if v is None or v == "":
+        return None
+    if isinstance(v, str):
+        try:
+            v = float(v)
+        except Exception:
+            try:
+                return int(datetime.fromisoformat(v.strip().replace("Z", "+00:00")).timestamp() * 1000)
+            except Exception:
+                return None
+    v = float(v)
+    return int(v * 1000) if 0 < v < 1e11 else int(v)
+
+
+def hhmm(ts) -> str:
+    s = iso(ts)
+    return s[11:16] if len(s) >= 16 else ""
+
+
+def _dw(s: str) -> int:
+    """按终端显示宽度计长（CJK 记 2），用于对齐表格。"""
+    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in str(s))
+
+
+def _pad(s, n: int, right: bool = False) -> str:
+    s = str(s)
+    gap = " " * max(0, n - _dw(s))
+    return gap + s if right else s + gap
+
+
+def _cut(s: str, n: int) -> str:
+    s = " ".join((s or "").split())
+    return s if _dw(s) <= n else s[: max(1, n - 1)] + "…"
+
+
+def _km(n) -> str:
+    """token 数的紧凑写法：日志要的是量级，不需要精确到个位。"""
+    n = int(n or 0)
+    if n >= 1_000_000:
+        return f"{n / 1e6:.2f}M"
+    if n >= 1000:
+        return f"{n / 1000:.1f}k"
+    return str(n)
+
+
+def _parent_name(fp: str) -> str:
+    """取路径的上一级目录名，用于把「工作区外写入」归到可读的桶里。"""
+    parts = [p for p in (fp or "").replace("\\", "/").rstrip("/").split("/") if p]
+    if len(parts) >= 2:
+        return parts[-2]
+    return parts[0] if parts else "?"
+
+
+# 会改动文件的工具名；用于核对「工具调用数」与「可定位路径数」的差额
+EDIT_TOOL_NAMES = ("Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch")
+
+
+class DayCollector:
+    """把一个会话的事件流按天分桶，并在每天内部再按「指令」切成轮次。
+
+    与 SessionParser 的差别：SessionParser 只留首末时间，够判定「这个项目最近
+    在干什么」，但撑不起「今天做了什么」。这里跟游标走，事件归到它前面最近
+    的那个 ts 所属的日期。
+
+    为什么还要轮次：日志的最小单元不是「一天」，而是「一句话 → 它带来的产出」。
+    只按天收集只能产出两份平行清单（今天说了什么 / 今天改了哪些文件），写日志
+    时还得靠人脑把两边对齐。轮次把这个配对在采集阶段就做掉。
+
+    刻意不保留文件正文——735MB 转录全量走一遍，留正文会直接吃掉内存。
+    """
+
+    def __init__(self, ws: str, sid: str, source: str, title: str):
+        self.ws, self.sid, self.source, self.title = ws, sid, source, title
+        self.cur = None
+        self.days = {}          # 日期 -> 桶
+        self.untimed = 0        # 前面没有任何 ts 的事件数（无法归日）
+        self.write_calls = 0    # Write/Edit 类工具调用数
+        self.write_hits = 0     # 其中成功归一为工作区相对路径的个数
+        self.external_hits = 0  # 其中落在工作区外的个数
+        self.dup = 0            # 被压掉的重复指令数
+        self._seen = set()      # 长指令的指纹，用于压重
+        self._git_cache = {}    # 目录 -> 仓库名，避免逐文件向上找 .git
+        self._root_cache = {}   # 目录 -> 仓库根，用于把区外路径截短
+
+    def _bucket(self, d: str) -> dict:
+        b = self.days.get(d)
+        if b is None:
+            b = {"prompts": [], "files": {}, "tools": {}, "external": {},
+                 "first": "", "last": "", "chars": 0, "errors": 0,
+                 "wcalls": 0, "whits": 0, "exts": 0,
+                 # 轮次视图：turns[i] 是该天第 i 条指令及其产出
+                 "turns": [], "tcls": {}, "ccmd": {}, "cur": None,
+                 # token 用量：唯一能把「成本」和「产出」连起来的字段
+                 "tok": {"in": 0, "out": 0, "cache_read": 0},
+                 # 工作区外写入的文件与时间跨度，供 --merge-external 生成独立行
+                 "extfiles": {}, "extspan": {}}
+            self.days[d] = b
+        return b
+
+    def _ext_key(self, fp: str) -> str:
+        """工作区外写入的分组键：优先仓库名，退化为目录名。
+
+        按目录名分组会把同一个仓库拆成几条（不同子目录各算一个），按 git 身份
+        分组则天然收敛；没有 git 的目录仍退回目录名。
+        """
+        d = os.path.dirname(str(fp).replace("\\", "/")) or str(fp)
+        key = self._git_cache.get(d)
+        if key is None:
+            gid = git_identity(d)
+            key = (gid or {}).get("name") or _parent_name(fp)
+            self._git_cache[d] = key
+        return key
+
+    def _ext_rel(self, fp: str) -> str:
+        """区外文件 → 尽量短的显示名：相对仓库根，退化为「目录/文件名」。
+
+        绝对路径写进日志会把正文冲成一堆路径，且暴露用户名，所以必须截短；
+        截短后仍保留一级目录，才能看出「动的是 src 还是 docs」。
+        """
+        p = str(fp).replace("\\", "/")
+        d = os.path.dirname(p) or p
+        root = self._root_cache.get(d)
+        if root is None:
+            root = git_work_tree(d)
+            self._root_cache[d] = root
+        if root:
+            pre = root.replace("\\", "/").rstrip("/") + "/"
+            if p.lower().startswith(pre.lower()):
+                return p[len(pre):]
+        return f"{_parent_name(fp)}/{p.rsplit('/', 1)[-1]}"
+
+    def consume(self, events):
+        for ev in events:
+            kind = ev.get("kind")
+            if kind == EV_TS:
+                v = ev.get("value")
+                if v:
+                    self.cur = v
+                    d = day(v)
+                    if d:
+                        b = self._bucket(d)
+                        if not b["first"]:
+                            b["first"] = v
+                        b["last"] = v
+                continue
+            d = day(self.cur) if self.cur else ""
+            if not d:
+                self.untimed += 1
+                continue
+            b = self._bucket(d)
+            tn = b["cur"]
+            if kind == EV_PROMPT:
+                txt = (ev.get("text") or "").strip()
+                if txt:
+                    # 上下文压缩会把早先的提问原样重放一遍，长指令按指纹压重；
+                    # 「继续」「好」这类短指令保留，它们确实是当天的动作。
+                    if len(txt) >= 20:
+                        fp = sha1_text(txt)
+                        if fp in self._seen:
+                            self.dup += 1
+                            continue
+                        self._seen.add(fp)
+                    b["prompts"].append((hhmm(self.cur), txt))
+                    tn = {"t": hhmm(self.cur), "prompt": txt, "files": [],
+                          "cmds": [], "tcls": {}, "errors": 0, "chars": 0,
+                          "tok": {"in": 0, "out": 0, "cache_read": 0}}
+                    b["turns"].append(tn)
+                    b["cur"] = tn
+            elif kind == EV_ASSISTANT:
+                n = len(ev.get("text") or "")
+                b["chars"] += n
+                if tn:
+                    tn["chars"] += n
+            elif kind == EV_TOOL:
+                n = ev.get("name") or ""
+                b["tools"][n] = b["tools"].get(n, 0) + 1
+                cls = ev.get("tcls") or tool_type(n)
+                b["tcls"][cls] = b["tcls"].get(cls, 0) + 1
+                if tn:
+                    tn["tcls"][cls] = tn["tcls"].get(cls, 0) + 1
+                cmd = ev.get("cmd") or ""
+                if cmd:
+                    cc = cmd_class(cmd)
+                    b["ccmd"][cc] = b["ccmd"].get(cc, 0) + 1
+                    if tn and len(tn["cmds"]) < 8:
+                        tn["cmds"].append((cc, cmd))
+                if n in EDIT_TOOL_NAMES:
+                    self.write_calls += 1
+                    b["wcalls"] += 1
+            elif kind == EV_WRITE:
+                rel = ev.get("rel")
+                if rel:
+                    self.write_hits += 1
+                    b["whits"] += 1
+                    op = ev.get("op") or "write"
+                    if b["files"].get(rel) != "write":
+                        b["files"][rel] = op
+                    if tn is not None and rel not in tn["files"]:
+                        tn["files"].append(rel)
+                elif ev.get("external"):
+                    # 工作区外的写入：不进 files，只按仓库/目录计数
+                    self.external_hits += 1
+                    b["exts"] += 1
+                    k = self._ext_key(ev["external"])
+                    b["external"][k] = b["external"].get(k, 0) + 1
+                    # 同时留一份文件清单：归档必须丢弃区外写入，日志不能
+                    rec = b["extfiles"].setdefault(k, {})
+                    rel = self._ext_rel(ev["external"])
+                    if rec.get(rel) != "write":
+                        rec[rel] = ev.get("op") or "write"
+                    if self.cur:
+                        sp = b["extspan"].setdefault(k, ["", ""])
+                        if not sp[0] or self.cur < sp[0]:
+                            sp[0] = self.cur
+                        if not sp[1] or self.cur > sp[1]:
+                            sp[1] = self.cur
+            elif kind == EV_TOOL_RESULT:
+                b["errors"] += 1
+                if tn:
+                    tn["errors"] += 1
+            elif kind == EV_USAGE:
+                for k in ("in", "out", "cache_read"):
+                    v = ev.get(k) or 0
+                    if v:
+                        b["tok"][k] += v
+                        if tn:
+                            tn["tok"][k] += v
+        return self
+
+
+
+def _merge_external_groups(groups: dict):
+    """把「工作区外写入」提升为独立的工作区行。
+
+    会话 cwd 和实际干活的仓库经常不是同一个（实测某天 209 次写盘里 145 次在区外）。
+    只统计不归类，表上就只剩一半工作量，日志正文也只能覆盖一半。
+    这里按仓库身份拆成独立行，让「今天还动了哪些仓库」在表里可见；
+    **归档侧仍然丢弃这些写入**，两者互不影响。
+
+    不给伪行分 token：usage 是模型调用级的，没有目录维度，硬拆就是编数字。
+    """
+    for g in list(groups.values()):
+        for key, files in g.get("extfiles", {}).items():
+            row = groups.get("ext::" + key)
+            if row is None:
+                row = groups["ext::" + key] = {
+                    "ws": key, "is_ext": True, "sessions": [], "prompts": [],
+                    "files": {}, "tools": {}, "external": {}, "first": "", "last": "",
+                    "turns": [], "tcls": {}, "ccmd": {},
+                    "tok": {"in": 0, "out": 0, "cache_read": 0},
+                    "extfiles": {}, "extspan": {},
+                    "wcalls": 0, "whits": 0, "exts": 0}
+            for rel, op in files.items():
+                if row["files"].get(rel) != "write":
+                    row["files"][rel] = op
+            row["exts"] += (g.get("external") or {}).get(key, 0)
+            sp = (g.get("extspan") or {}).get(key)
+            if sp:
+                if sp[0] and (not row["first"] or sp[0] < row["first"]):
+                    row["first"] = sp[0]
+                if sp[1] and (not row["last"] or sp[1] > row["last"]):
+                    row["last"] = sp[1]
+
+
+def _load_cols(sources=None, s_ms=None, e_ms=None):
+    """解析范围内所有会话，返回 (stat, cols, adapters)。
+
+    按范围统计时**只解析一次**，再对每个日期分别聚合——`collect_day` 连跑七天会让
+    735MB 转录被解析七遍。这也是"预览与落盘各算一遍导致口径漂移"之外的另一个坑。
+    """
+    adapters = get_adapters(sources)
+    idx = build_index(adapters)
+    sids = sorted(idx.ids())
+
+    stat = {"total": len(sids), "auto": 0, "no_transcript": 0, "out_of_range": 0,
+            "no_meta": 0, "cand": 0, "parsed": 0, "hit": 0, "untimed": 0,
+            "write_calls": 0, "write_hits": 0, "multi_day": 0, "failed": 0,
+            "no_cwd": 0, "dup": 0, "meta_fixed": 0, "external": 0, "no_usage": 0}
+    cols = []
+
+    for sid in sids:
+        info = idx.info(sid) or {}
+        cwd = (info.get("cwd") or "").replace("\\", "/")
+        if not cwd:
+            stat["no_cwd"] += 1
+            continue
+        if info.get("meta_from") == "transcript":
+            stat["meta_fixed"] += 1
+        # 只排除后台自动化任务。is_playground 表示「在对话界面创建」，
+        # 是所有正常会话的默认值，按它过滤会把日志清空。
+        if info.get("automation"):
+            stat["auto"] += 1
+            continue
+        path = idx.transcript(sid)
+        if not path:
+            stat["no_transcript"] += 1
+            continue
+        c_ms = to_ms(info.get("created"))
+        u_ms = to_ms(info.get("updated")) or c_ms
+        lo = c_ms if c_ms is not None else u_ms
+        if lo is None:
+            stat["no_meta"] += 1        # 无元数据：无从判断，保守解析
+        elif s_ms is not None and not (u_ms >= s_ms and lo < e_ms):
+            stat["out_of_range"] += 1
+            continue
+        stat["cand"] += 1
+        ad = adapter_of(info.get("source") or "")
+        col = DayCollector(cwd, sid, info.get("source") or "", info.get("title") or "")
+        try:
+            col.consume(ad.iter_events(path, cwd))
+        except Exception as e:
+            stat["failed"] += 1
+            print(f"  [warn] {sid[:8]} 解析失败：{e}")
+            continue
+        stat["parsed"] += 1
+        stat["untimed"] += col.untimed
+        stat["dup"] += col.dup
+        if len([d for d, b in col.days.items() if b["prompts"] or b["files"]]) > 1:
+            stat["multi_day"] += 1
+        if not any(sum(b["tok"].values()) for b in col.days.values()):
+            stat["no_usage"] += 1
+        cols.append(col)
+    return stat, cols, adapters
+
+
+def _empty_group(ws: str) -> dict:
+    """一个工作区的累计桶。按天分组与跨天合并共用同一形状，才能无损相加。"""
+    return {"ws": ws, "sessions": [], "prompts": [], "files": {}, "tools": {},
+            "external": {}, "first": "", "last": "",
+            "turns": [], "tcls": {}, "ccmd": {},
+            "tok": {"in": 0, "out": 0, "cache_read": 0},
+            "extfiles": {}, "extspan": {}, "wcalls": 0, "whits": 0, "exts": 0}
+
+
+def _aggregate_day(cols, date_str: str):
+    """把已解析的采集器按某一天归并成 {ws -> group}。返回 (groups, 命中会话数)。"""
+    groups = {}
+    hits = 0
+    for col in cols:
+        b = col.days.get(date_str)
+        if not b or not (b["prompts"] or b["files"]):
+            continue
+        hits += 1
+        g = groups.get(col.ws.lower())
+        if g is None:
+            g = groups[col.ws.lower()] = _empty_group(col.ws)
+        g["sessions"].append({
+            "sid": col.sid, "title": col.title, "source": col.source,
+            "prompts": len(b["prompts"]), "files": len(b["files"]),
+            "writes": sum(1 for v in b["files"].values() if v == "write"),
+            "edits": sum(1 for v in b["files"].values() if v != "write"),
+            "first": b["first"], "last": b["last"],
+            "file_list": sorted(b["files"]),
+        })
+        g["prompts"].extend(b["prompts"])
+        for rel, op in b["files"].items():
+            if g["files"].get(rel) != "write":
+                g["files"][rel] = op
+        for n, c in b["tools"].items():
+            g["tools"][n] = g["tools"].get(n, 0) + c
+        for k, c in b["tcls"].items():
+            g["tcls"][k] = g["tcls"].get(k, 0) + c
+        for k, c in b["ccmd"].items():
+            g["ccmd"][k] = g["ccmd"].get(k, 0) + c
+        if b["turns"]:
+            g["turns"].extend(b["turns"])
+        for d, n in b["external"].items():
+            g["external"][d] = g["external"].get(d, 0) + n
+        for k, files in b["extfiles"].items():
+            rec = g["extfiles"].setdefault(k, {})
+            for rel, op in files.items():
+                if rec.get(rel) != "write":
+                    rec[rel] = op
+        for k, sp in b["extspan"].items():
+            cur = g["extspan"].setdefault(k, ["", ""])
+            if sp[0] and (not cur[0] or sp[0] < cur[0]):
+                cur[0] = sp[0]
+            if sp[1] and (not cur[1] or sp[1] > cur[1]):
+                cur[1] = sp[1]
+        for k in ("in", "out", "cache_read"):
+            g["tok"][k] += b["tok"][k]
+        g["wcalls"] += b["wcalls"]
+        g["whits"] += b["whits"]
+        g["exts"] += b["exts"]
+        for k in ("first", "last"):
+            if b[k] and (not g[k] or (b[k] < g[k] if k == "first" else b[k] > g[k])):
+                g[k] = b[k]
+    return groups, hits
+
+
+def _merge_group(dst: dict, src: dict):
+    """把一天的分组合并进累计分组。两边形状必须一致（都来自 _empty_group）。"""
+    dst["sessions"].extend(src["sessions"])
+    dst["prompts"].extend(src["prompts"])
+    dst["turns"].extend(src["turns"])
+    for rel, op in src["files"].items():
+        if dst["files"].get(rel) != "write":
+            dst["files"][rel] = op
+    for key in ("tools", "tcls", "ccmd", "external"):
+        for k, c in src[key].items():
+            dst[key][k] = dst[key].get(k, 0) + c
+    for k, files in src["extfiles"].items():
+        rec = dst["extfiles"].setdefault(k, {})
+        for rel, op in files.items():
+            if rec.get(rel) != "write":
+                rec[rel] = op
+    for k, sp in src["extspan"].items():
+        cur = dst["extspan"].setdefault(k, ["", ""])
+        if sp[0] and (not cur[0] or sp[0] < cur[0]):
+            cur[0] = sp[0]
+        if sp[1] and (not cur[1] or sp[1] > cur[1]):
+            cur[1] = sp[1]
+    for k in ("in", "out", "cache_read"):
+        dst["tok"][k] += src["tok"][k]
+    for k in ("wcalls", "whits", "exts"):
+        dst[k] += src[k]
+    if src["first"] and (not dst["first"] or src["first"] < dst["first"]):
+        dst["first"] = src["first"]
+    if src["last"] and (not dst["last"] or src["last"] > dst["last"]):
+        dst["last"] = src["last"]
+
+
+def tok_total(g: dict) -> int:
+    """一组 token 的合计。**只算 input + output**。
+
+    cache_read 是 input 的子集（实测 `total = input + output`），三者相加会把输入
+    算成两倍——这个坑在 daylog 阶段踩过一次，规则写在这里，别再踩第二次。
+    """
+    tok = g.get("tok") or {}
+    return int(tok.get("in", 0)) + int(tok.get("out", 0))
+
+
+def _finalize_groups(groups: dict):
+    """排序与派生字段。合并后必须再调一次——顺序变了，writes/edits 也要重算。"""
+    for g in groups.values():
+        g["prompts"].sort(key=lambda x: x[0])
+        g["turns"].sort(key=lambda x: x["t"])
+        g["writes"] = sum(1 for v in g["files"].values() if v == "write")
+        g["edits"] = sum(1 for v in g["files"].values() if v != "write")
+
+
+def collect_day(date_str: str, sources=None, merge_external: bool = False) -> dict:
+    """把某一天的活动聚合成 {stat, groups, adapters}。
+
+    预览（run_daylog）与落盘（cmd_log）共用同一份聚合，口径不会各走一路。
+    纯函数式：只读转录，不写文件、不调模型。
+    """
+    try:
+        s_ms, e_ms = day_range_ms(date_str)
+    except Exception:
+        return {"ok": False, "msg": f"日期格式应为 YYYY-MM-DD：{date_str}"}
+
+    stat, cols, adapters = _load_cols(sources, s_ms, e_ms)
+    groups, stat["hit"] = _aggregate_day(cols, date_str)
+    if merge_external:
+        _merge_external_groups(groups)
+    _finalize_groups(groups)
+
+    # 写盘口径统一到「当天」：会话级累计会把别的日子的写入算进来，与表格矛盾
+    real = [g for g in groups.values() if not g.get("is_ext")]
+    stat["write_calls"] = sum(g["wcalls"] for g in real)
+    stat["write_hits"] = sum(g["whits"] for g in real)
+    stat["external"] = sum(g["exts"] for g in real)
+
+    return {"ok": True, "stat": stat, "groups": groups, "adapters": adapters}
+
+
+def collect_range(days, sources=None, merge_external: bool = False) -> dict:
+    """多天聚合：解析一次，按天归并，再合并成一份总数。
+
+    `stats` 走这里，保证和 `daylog` 是同一套口径——同一个数字在两处对不上，
+    用户就再也不会相信任何一个。
+    """
+    if not days:
+        return {"ok": False, "msg": "日期范围为空"}
+    try:
+        s_ms, _ = day_range_ms(days[0])
+        _, e_ms = day_range_ms(days[-1])
+    except Exception:
+        return {"ok": False, "msg": "日期格式应为 YYYY-MM-DD"}
+
+    stat, cols, adapters = _load_cols(sources, s_ms, e_ms)
+    total, daily = {}, []
+    for d in days:
+        groups, hits = _aggregate_day(cols, d)
+        stat["hit"] += hits
+        real = [g for g in groups.values() if not g.get("is_ext")]
+        daily.append({
+            "date": d, "hits": hits, "projects": len(real),
+            "prompts": sum(len(g["prompts"]) for g in real),
+            "files": sum(len(g["files"]) for g in real),
+            "tokens": sum(tok_total(g) for g in real),
+            "cache_read": sum(g["tok"]["cache_read"] for g in real),
+        })
+        for key, g in groups.items():
+            dst = total.get(key)
+            if dst is None:
+                dst = total[key] = _empty_group(g["ws"])
+            _merge_group(dst, g)
+    if merge_external:
+        _merge_external_groups(total)
+    _finalize_groups(total)
+
+    real = [g for g in total.values() if not g.get("is_ext")]
+    stat["write_calls"] = sum(g["wcalls"] for g in real)
+    stat["write_hits"] = sum(g["whits"] for g in real)
+    stat["external"] = sum(g["exts"] for g in real)
+
+    return {"ok": True, "stat": stat, "groups": total, "daily": daily,
+            "adapters": adapters, "days": days}
+
+def run_daylog(target: Path, date_str: str, sources=None, as_json=False,
+               merge_external: bool = False) -> int:
+    """打印某一天的开发活动分桶表。只读：不写文件、不调模型。"""
+    r = collect_day(date_str, sources, merge_external)
+    if not r["ok"]:
+        print(r["msg"])
+        return 2
+    stat, groups, adapters = r["stat"], r["groups"], r["adapters"]
+
+    if as_json:
+        out = {
+            "date": date_str,
+            "sources": [a.name for a in adapters],
+            "stat": stat,
+            "workspaces": [{
+                "workspace": g["ws"],
+                # external_row=是否是「工作区外」伪行；external=区外写入计数（两个键不能同名，
+                # 同名字典里后者覆盖前者，会把真工作区误标成区外行）
+                "external_row": bool(g.get("is_ext")),
+                "sessions": len(g["sessions"]),
+                "prompts": len(g["prompts"]),
+                "files": sorted(g["files"]),
+                "tools": g["tools"],
+                "external": g["external"],
+                "tool_classes": g["tcls"],
+                "cmd_classes": g["ccmd"],
+                "tokens": g["tok"],
+                "turns": [{
+                    "time": t["t"], "prompt": t["prompt"],
+                    "files": t["files"][:20],
+                    "commands": [{"kind": k, "cmd": c} for k, c in t["cmds"]],
+                    "errors": t["errors"],
+                    "tokens": t["tok"],
+                } for t in g["turns"]],
+                "first": hhmm(g["first"]),
+                "last": hhmm(g["last"]),
+                "sessions_detail": g["sessions"],
+            } for g in sorted(groups.values(), key=lambda x: -len(x["prompts"]))],
+        }
+        print(json.dumps(out, ensure_ascii=False, indent=2))
+        return 0
+
+    # ---------- 控制台预览
+    print(f"=== daylog {date_str} · 零写入预览 ===\n")
+    print(f"数据源        {', '.join(a.name for a in adapters)}")
+    print(f"会话总数      {stat['total']}")
+    print(f"  跳过·自动化   {stat['auto']}    （后台任务，不是人的工作）")
+    print(f"  跳过·无转录   {stat['no_transcript']}")
+    print(f"  跳过·不在当天 {stat['out_of_range']}    （时间窗与当天无交集）")
+    print(f"  跳过·缺工作区 {stat['no_cwd']}    （拿不到 cwd，无法定位写入）")
+    if stat["meta_fixed"]:
+        print(f"  补元数据      {stat['meta_fixed']}    （库里没这行，已从转录头部补出 cwd/起始时间）")
+    print(f"  实际解析      {stat['parsed']} / 候选 {stat['cand']}"
+          + (f"，失败 {stat['failed']}" if stat["failed"] else ""))
+    print(f"命中当天      {stat['hit']} 个会话，{len(groups)} 个工作区\n")
+
+    if not groups:
+        print("当天没有可归集的活动。可能原因：当天确实没开发；或会话时间戳缺失。")
+        return 0
+
+    W = 46
+    head = (_pad("工作区", W) + _pad("会话", 6, True) + _pad("指令", 6, True)
+            + _pad("写", 5, True) + _pad("改", 5, True) + _pad("工具", 7, True)
+            + _pad("命令", 7, True) + "  跨度")
+    print(head)
+    print("-" * _dw(head))
+    for g in sorted(groups.values(), key=lambda x: (-len(x["prompts"]), x["ws"])):
+        ws = _cut(("↳ 区外 " if g.get("is_ext") else "") + g["ws"], W - 2)
+        print(_pad(ws, W) + _pad(len(g["sessions"]), 6, True) + _pad(len(g["prompts"]), 6, True)
+              + _pad(g["writes"], 5, True) + _pad(g["edits"], 5, True)
+              + _pad(sum(g["tools"].values()), 7, True)
+              + _pad(g["tcls"].get("shell", 0), 7, True)
+              + f"  {hhmm(g['first'])}-{hhmm(g['last'])}")
+    print()
+
+    # 工具分类：表格里的「工具」是总数，这里回答「时间花在哪类动作上」
+    cls_tot = {}
+    for g in groups.values():
+        for k, n in g["tcls"].items():
+            cls_tot[k] = cls_tot.get(k, 0) + n
+    if cls_tot:
+        order = [("write", "写盘"), ("read", "读"), ("search", "检索"),
+                 ("shell", "命令"), ("task", "任务"), ("generic", "其它"),
+                 ("unknown", "未知")]
+        seg = [f"{label} {cls_tot.get(k, 0)}" for k, label in order if cls_tot.get(k)]
+        print("动作构成      " + " · ".join(seg))
+
+    # 命令用途：能直接写进汇报的事实
+    cc_tot = {}
+    for g in groups.values():
+        for k, n in g["ccmd"].items():
+            cc_tot[k] = cc_tot.get(k, 0) + n
+    if cc_tot:
+        label = {"script": "脚本", "build": "构建", "test": "测试", "git": "git",
+                 "deps": "装依赖", "inspect": "查看", "other": "其它"}
+        seg = [f"{label.get(k, k)} {cc_tot[k]}"
+               for k in ("build", "test", "deps", "git", "script", "inspect", "other")
+               if cc_tot.get(k)]
+        print("命令用途      " + " · ".join(seg))
+
+    # token 用量：把「成本」落到天和轮次上。没有它，日志只能记「做了什么」，
+    # 无法回答「这件事花了多少」——而后者才是管理者真正在算的账。
+    tok_tot = {"in": 0, "out": 0, "cache_read": 0}
+    for g in groups.values():
+        for k in tok_tot:
+            tok_tot[k] += g["tok"][k]
+    if any(tok_tot.values()):
+        seg = [f"输入 {_km(tok_tot['in'])}", f"输出 {_km(tok_tot['out'])}"]
+        if tok_tot["cache_read"]:
+            # total_tokens = input + output 已成立，说明 cache_read 是 input 的子集；
+            # 它只能算「命中率」，不能与 input 相加，否则输入量会被重复计一遍。
+            seg.append(f"其中缓存命中 {_km(tok_tot['cache_read'])}"
+                       f"（{tok_tot['cache_read'] * 100 // max(1, tok_tot['in'])}%）")
+        print("token 用量    " + " · ".join(seg))
+    print()
+
+    print("数据完整性")
+    print(f"  · 无时间戳事件      {stat['untimed']}"
+          + ("   ← 无法归日，已丢弃" if stat["untimed"] else "   （事件都带 ts，时间粒度可用）"))
+    lost = stat["write_calls"] - stat["write_hits"] - stat["external"]
+    print(f"  · 写盘调用          {stat['write_calls']} 次")
+    print(f"      工作区内         {stat['write_hits']}")
+    print(f"      工作区外         {stat['external']}   ← 未计入上表，别处的写入")
+    if lost:
+        print(f"      无路径字段       {lost}   ← 工具参数里没有文件路径，无法定位")
+    ext_dirs = {}
+    for g in groups.values():
+        for d, n in g["external"].items():
+            ext_dirs[d] = ext_dirs.get(d, 0) + n
+    if ext_dirs:
+        top = sorted(ext_dirs.items(), key=lambda x: -x[1])[:3]
+        print(f"      主要去向         " + "、".join(f"{_cut(d, 20)}({n})" for d, n in top))
+        if stat["external"] > stat["write_hits"]:
+            print("      ⚠ 外部写入多于工作区内写入：该会话的实际干活目录和工作区不是同一个，")
+            print("        只看表格会严重低估当天的工作量，日志正文必须把外部目录算进去。")
+    print(f"  · 重复指令已压重     {stat['dup']}"
+          + ("   ← 上下文压缩导致的原文重放" if stat["dup"] else ""))
+    print(f"  · 跨天会话          {stat['multi_day']}"
+          + ("   ← 同一会话会出现在多天，按天切分属预期" if stat["multi_day"] else ""))
+    print(f"  · 无 token 记录的会话 {stat['no_usage']} / 已解析 {stat['parsed']}"
+          + ("   ← 该平台不写 usage，成本侧只能留空，不可用 0 顶替"
+             if stat["no_usage"] else "   （成本侧数据完整）"))
+    print()
+
+    print("明细（默认不脱敏；落盘稿会过 desensitize）")
+    shown = 0
+    for g in sorted(groups.values(), key=lambda x: -len(x["prompts"])):
+        if shown >= 6:
+            print(f"  … 另有 {len(groups) - shown} 个工作区未展示")
+            break
+        shown += 1
+        if g.get("is_ext"):
+            print(f"\n[区外] {_cut(g['ws'], 56)}  不是会话工作区，"
+                  f"但当天有 {g['exts']} 次写入落在这里")
+            fl = [x for x in sorted(g["files"]) if not SENSITIVE_PATH_HINT.search(x)]
+            hidden = len(g["files"]) - len(fl)
+            print(f"  文件：{'、'.join(_cut(x, 26) for x in fl[:8])}"
+                  + (f" 等 {len(fl)} 个" if len(fl) > 8 else "")
+                  + (f"（另 {hidden} 个敏感路径未列出）" if hidden else ""))
+            if g["first"]:
+                print(f"  时段：{hhmm(g['first'])}-{hhmm(g['last'])}")
+            continue
+        print(f"\n[{_cut(g['ws'], 64)}]  指令 {len(g['prompts'])} · 文件 {len(g['files'])}")
+        # 只列「有产出」的轮次：改了不少文件、跑了命令、或撞了错误的那几条，
+        # 这些才是日志的候选句子；纯问答轮次不进正文。
+        rich = [t for t in g["turns"]
+                if t["files"] or t["cmds"] or t["errors"]]
+        # 先按产出量取前 10 条，再按时间排回顺序：日志是叙事，时间乱序读不下去，
+        # 但纯粹的「最早 10 条」会把重活漏掉。
+        rich.sort(key=lambda t: -(len(t["files"]) + len(t["cmds"]) + t["errors"]))
+        rich = sorted(rich[:10], key=lambda t: t["t"])
+        for t in rich[:8]:
+            bits = []
+            if t["files"]:
+                bits.append(f"{len(t['files'])} 文件")
+            if t["cmds"]:
+                kinds = {}
+                for k, _ in t["cmds"]:
+                    kinds[k] = kinds.get(k, 0) + 1
+                lab = {"build": "构建", "test": "测试", "git": "git",
+                       "deps": "依赖", "script": "脚本", "inspect": "查看",
+                       "other": "命令"}
+                bits.append(" ".join(f"{lab.get(k, k)}×{n}" for k, n in kinds.items()))
+            if t["errors"]:
+                bits.append(f"错误 {t['errors']}")
+            tk = (t.get("tok") or {}).get("out", 0) + (t.get("tok") or {}).get("in", 0)
+            if tk:
+                bits.append(f"{_km(tk)} tok")
+            print(f"  {t['t']}  {_cut(t['prompt'], 52)}")
+            print(f"           → {' · '.join(bits)}")
+            if t["files"]:
+                print(f"             {'、'.join(_cut(x, 26) for x in t['files'][:5])}"
+                      + (" …" if len(t["files"]) > 5 else ""))
+        if not rich:
+            for t, txt in g["prompts"][:6]:
+                print(f"  {t}  {_cut(txt, 60)}")
+        elif len(rich) < len(g["turns"]):
+            print(f"         … 另 {len(g['turns']) - len(rich)} 条纯问答轮次未展示")
+        if g["external"]:
+            ex = sorted(g["external"].items(), key=lambda x: -x[1])[:4]
+            print(f"  区外：{'、'.join(f'{_cut(d, 20)}({n})' for d, n in ex)}"
+                  f"  共 {g['exts']} 次写入，不在本工作区内")
+    return 0
+
+
+def render_daylog_md(date_str: str, r: dict, note: str = "") -> str:
+    """把一天的分桶结果渲染成 Markdown 清点稿。
+
+    刻意只写事实、不做判断：这里没有「本周完成/进行中/阻塞」的归纳，因为那需要
+    读懂上下文，属于模型该做的事。清点稿的职责是把证据摆齐——每条指令后面直接
+    跟它改了哪些文件、跑了什么命令、花了多少 token，让归纳有据可依。
+
+    纯函数：同样的入参永远得到同样的字符串，落盘才能幂等（定时任务每天跑不会
+    产生无意义的 diff）。
+    """
+    stat, groups = r["stat"], r["groups"]
+    real = [g for g in groups.values() if not g.get("is_ext")]
+    ext = [g for g in groups.values() if g.get("is_ext")]
+    real.sort(key=lambda x: -len(x["prompts"]))
+
+    tok = {"in": 0, "out": 0, "cache_read": 0}
+    for g in real:
+        for k in tok:
+            tok[k] += g["tok"][k]
+
+    L = [f"# 工作日志 {date_str}", ""]
+    if note:
+        L += [f"> {note}", ""]
+    L += [f"> 由 dev-project-archivist 从本地 AI 会话自动清点，**未调用模型**。",
+          f"> 数据源：{'、'.join(a.name for a in r['adapters'])} · "
+          f"会话 {stat['hit']} 个 · 工作区 {len(real)} 个", ""]
+
+    total_prompts = sum(len(g["prompts"]) for g in real)
+    total_files = sum(len(g["files"]) for g in real)
+    if not real:
+        L += ["当天没有可归集的活动。", ""]
+    else:
+        L += ["## 一、按项目清点", ""]
+        for i, g in enumerate(real, 1):
+            span = f"{hhmm(g['first'])}–{hhmm(g['last'])}" if g["first"] else "时间未知"
+            L += [f"### {i}. {desensitize(g['ws'])}", "",
+                  f"- 时段 {span} · 指令 {len(g['prompts'])} 条 · "
+                  f"文件 {len(g['files'])} 个（写 {g['writes']} / 改 {g['edits']}）"]
+            if g["tok"]["in"] or g["tok"]["out"]:
+                L.append(f"- 用量 输入 {_km(g['tok']['in'])} · 输出 {_km(g['tok']['out'])}")
+            if g["external"]:
+                top = sorted(g["external"].items(), key=lambda x: -x[1])[:3]
+                L.append(f"- 另有 {g['exts']} 次写入落在工作区外："
+                         + "、".join(f"{safe_path_label(k)}({n})" for k, n in top))
+            L.append("")
+            # 只列有产出的轮次：纯问答轮次进正文只会把日志冲成聊天记录
+            rich = [x for x in g["turns"] if x["files"] or x["cmds"] or x["errors"]]
+            rich.sort(key=lambda x: -(len(x["files"]) + len(x["cmds"]) + x["errors"]))
+            rich = sorted(rich[:20], key=lambda x: x["t"])
+            for x in rich:
+                bits = []
+                if x["cmds"]:
+                    kinds = {}
+                    for k, _ in x["cmds"]:
+                        kinds[k] = kinds.get(k, 0) + 1
+                    lab = {"script": "脚本", "build": "构建", "test": "测试",
+                           "deps": "依赖", "git": "git", "inspect": "查看", "other": "命令"}
+                    bits.append(" ".join(f"{lab.get(k, k)}×{n}" for k, n in kinds.items()))
+                if x["errors"]:
+                    bits.append(f"报错 {x['errors']}")
+                used = x["tok"]["in"] + x["tok"]["out"]   # cache_read 是 in 的子集，不能加
+                tail = f"（{_km(used)} tok）" if used else ""
+                L.append(f"- `{x['t']}` {desensitize(_cut(x['prompt'], 120))}"
+                         + (f" — {' · '.join(bits)}" if bits else "") + tail)
+                for fp in x["files"][:6]:
+                    L.append(f"  - `{desensitize(fp)}`")
+                if len(x["files"]) > 6:
+                    L.append(f"  - …另 {len(x['files']) - 6} 个文件")
+            if not rich:
+                L.append("- （当天只有问答，没有落到文件或命令上）")
+            L.append("")
+        L += ["## 二、当天合计", "",
+              f"- 指令 **{total_prompts}** 条 · 涉及文件 **{total_files}** 个 · "
+              f"工作区 **{len(real)}** 个"]
+        if any(tok.values()):
+            L.append(f"- token 输入 {_km(tok['in'])} · 输出 {_km(tok['out'])}"
+                     + (f" · 其中缓存命中 {_km(tok['cache_read'])}"
+                        f"（{tok['cache_read'] * 100 // max(1, tok['in'])}%）"
+                        if tok["cache_read"] else ""))
+        cls = {}
+        cmd = {}
+        for g in real:
+            for k, n in g["tcls"].items():
+                cls[k] = cls.get(k, 0) + n
+            for k, n in g["ccmd"].items():
+                cmd[k] = cmd.get(k, 0) + n
+        if cls:
+            order = [("write", "写盘"), ("read", "读"), ("search", "检索"),
+                     ("shell", "命令"), ("task", "任务"), ("generic", "其它")]
+            L.append("- 动作构成：" + " · ".join(f"{lb} {cls[k]}" for k, lb in order if cls.get(k)))
+        if cmd:
+            lab = {"script": "脚本", "build": "构建", "test": "测试", "deps": "装依赖",
+                   "git": "git", "inspect": "查看", "other": "其它"}
+            L.append("- 命令用途：" + " · ".join(
+                f"{lab.get(k, k)} {cmd[k]}"
+                for k in ("build", "test", "deps", "git", "script", "inspect", "other")
+                if cmd.get(k)))
+        L.append("")
+
+    if ext:
+        L += ["## 三、工作区外的改动", "",
+              "> 这些写入不在任何会话的工作区里（会话 cwd 与实际干活目录不一致）。",
+              "> 归档侧按设计丢弃，日志侧必须列出——否则当天工作量会被低估。", ""]
+        for g in sorted(ext, key=lambda x: -x["exts"]):
+            L.append(f"- **{safe_path_label(desensitize(g['ws']))}** {g['exts']} 次写入"
+                     f"（{hhmm(g['first'])}–{hhmm(g['last'])}）")
+            shown = [x for x in sorted(g["files"]) if not SENSITIVE_PATH_HINT.search(x)]
+            hidden = len(g["files"]) - len(shown)
+            if shown:
+                L.append("  " + "、".join(f"`{desensitize(x)}`" for x in shown[:8])
+                         + (f" 等 {len(shown)} 个" if len(shown) > 8 else ""))
+            if hidden:
+                L.append(f"  另有 {hidden} 个敏感路径（凭据/密钥类）未列出")
+        L.append("")
+
+    warn = []
+    if stat["untimed"]:
+        warn.append(f"无时间戳事件 {stat['untimed']} 条，未归入任何一天")
+    if stat["failed"]:
+        warn.append(f"{stat['failed']} 个会话解析失败，内容缺失")
+    if stat["no_usage"]:
+        warn.append(f"{stat['no_usage']} 个会话没有 token 记录，用量只能留空")
+    lost = stat["write_calls"] - stat["write_hits"] - stat["external"]
+    if lost > 0:
+        warn.append(f"{lost} 次写盘调用没有文件路径，无法定位")
+    if warn:
+        L += ["## 四、数据缺口", ""] + [f"- {w}" for w in warn] + [""]
+
+    L += ["---", "",
+          f"生成方式：`archiver.py log --date {date_str}`（只读转录，确定性输出）", ""]
+    return "\n".join(L)
+
+
+def cmd_log(target: Path, date_str: str, sources=None, out_dir: str = "",
+            merge_external: bool = True) -> int:
+    """把某天的清点稿写到 logs/YYYY-MM-DD.md。
+
+    默认开启 merge_external：落盘稿是给人看的，区外改动不列出来就是漏报。
+    """
+    r = collect_day(date_str, sources, merge_external)
+    if not r["ok"]:
+        print(r["msg"])
+        return 2
+    d = Path(out_dir) if out_dir else (target / "logs")
+    path = d / f"{date_str}.md"
+    md = render_daylog_md(date_str, r)
+    old = read_text(path) if path.exists() else ""
+    if old == md:
+        print(f"无变化：{path}")
+        return 0
+    atomic_write(path, md)
+    real = [g for g in r["groups"].values() if not g.get("is_ext")]
+    print(f"已写入 {path}")
+    print(f"  {date_str}：工作区 {len(real)} 个 · "
+          f"指令 {sum(len(g['prompts']) for g in real)} 条 · "
+          f"文件 {sum(len(g['files']) for g in real)} 个")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description="WorkBuddy 对话项目归档器")
-    ap.add_argument("cmd", choices=["scan", "render", "run", "pending", "status", "git-clean"],
+    ap.add_argument("--version", action="version",
+                    version=f"dev-project-archivist {__version__}")
+    ap.add_argument("cmd",
+                    choices=["scan", "render", "run", "pending", "status",
+                             "git-clean", "daylog", "log", "find", "stats", "report",
+                             "restore"],
                     help="scan=采集/render=渲染/run=全流程/pending=待归纳/status=状态/"
-                         "git-clean=重建归档器创建的 git 仓库以清除历史大对象")
+                         "git-clean=重建归档器创建的 git 仓库以清除历史大对象/"
+                         "daylog=按天汇总开发活动（预览，零写入）/"
+                         "log=把某天写成清点稿 <target>/logs/YYYY-MM-DD.md/"
+                         "find=跨项目检索（名字/文件名/指令原文，只读）/"
+                         "stats=跨天账本：最近 N 天的对话/文件/token（只读）/"
+                         "report=写成单文件 HTML 账本（可截图分享）/"
+                         "restore=按日恢复归档快照到副本目录（默认只预览）")
+    ap.add_argument("query", nargs="?", default="",
+                    help="find 的检索词，可空格分隔多个词（全部命中才计入）")
+    ap.add_argument("--open", action="store_true", dest="open_it",
+                    help="find 命中后打开第一条的原对话；report 生成后用浏览器打开")
     ap.add_argument("--target", default=str(DEFAULT_TARGET), help="归档输出目录")
     ap.add_argument("--dry-run", action="store_true", help="只打印分类结果，不写任何文件")
     ap.add_argument("--limit", type=int, default=0, help="只处理最近 N 个项目")
@@ -2355,11 +4938,55 @@ def main():
     ap.add_argument("--no-rename", action="store_true", help="渲染时不按摘要标题重命名目录")
     ap.add_argument("--source", default="all",
                     help="数据来源：all（默认，自动探测本机全部平台）或逗号分隔的适配器名")
+    ap.add_argument("--date", default="", help="daylog 的目标日期 / stats 的截止日期 / "
+                                              "restore 的恢复日期 YYYY-MM-DD；"
+                                              "restore 不传则列出可恢复的日期")
+    ap.add_argument("--all", action="store_true", dest="show_all",
+                    help="scan --dry-run 时连空壳会话一起列出（默认折叠）")
+    ap.add_argument("--explain", nargs="?", const="", default=None,
+                    help="打印判定依据：--explain [关键字]（只读，不写任何文件）")
+    ap.add_argument("--json", action="store_true", help="daylog/stats/find 以 JSON 输出（供脚本消费）")
+    ap.add_argument("--days", type=int, default=0,
+                    help="回溯天数：stats 默认 7，report 默认 30")
+    ap.add_argument("--merge-external", action="store_true",
+                    help="daylog 把工作区外的写入按仓库提升为独立行（默认只在体检里计数）")
+    ap.add_argument("--no-merge-external", action="store_true",
+                    help="log 落盘时不并列工作区外的改动（默认会列，漏报风险更大）")
+    ap.add_argument("--out", default="",
+                    help="log 的输出目录（默认 <target>/logs）/ report 的输出目录（默认 <target>/report）"
+                         "/ restore 的输出目录（默认 <target>/_restore）")
+    ap.add_argument("--write", action="store_true", dest="write_it",
+                    help="restore 真正展开副本（默认只预览，不写任何文件）")
     a = ap.parse_args()
 
     sources = [x.strip() for x in (a.source or "").split(",") if x.strip()]
 
     target = Path(a.target)
+    if a.cmd == "daylog":
+        # 只读命令：不需要目标目录，也不加锁
+        return run_daylog(target, a.date or datetime.now().strftime("%Y-%m-%d"),
+                          sources=sources, as_json=a.json,
+                          merge_external=a.merge_external)
+    if a.cmd == "log":
+        return cmd_log(target, a.date or datetime.now().strftime("%Y-%m-%d"),
+                       sources=sources, out_dir=a.out,
+                       merge_external=not a.no_merge_external)
+    if a.cmd == "stats":
+        # 只读命令：不需要目标目录，也不加锁
+        return cmd_stats(sources, days=a.days or 7, end=a.date, as_json=a.json)
+    if a.cmd == "report":
+        # 只写一个 html 文件，不碰归档正文，因此不加锁
+        return cmd_report(target, sources=sources, days=a.days or 30,
+                          end=a.date, out=a.out, open_it=a.open_it)
+    if a.cmd == "find":
+        # 只读命令：不加锁、不写任何文件
+        return cmd_find(target, a.query, as_json=a.json,
+                        show_all=a.show_all, open_it=a.open_it)
+    if a.cmd == "restore":
+        # 只读归档仓库，写入点只有 <target>/_restore/：两边不共享文件，
+        # 因此不加锁（加了反而会让恢复在定时任务跑的时候白等一小时）
+        return cmd_restore(target, a.date, only=a.only, out=a.out,
+                           write=a.write_it, force=a.force, as_json=a.json)
     if a.cmd == "status":
         return cmd_status(target)
     if a.cmd == "pending":
@@ -2367,9 +4994,15 @@ def main():
     if a.cmd == "git-clean":
         return cmd_git_clean(target)
 
+    if a.explain is not None:
+        return run_scan(target, dry_run=True, limit=a.limit, only=a.only,
+                        force=True, min_code=a.min_code, sources=sources,
+                        show_all=True, explain=a.explain)
+
     if a.dry_run:
         return run_scan(target, dry_run=True, limit=a.limit, only=a.only,
-                        force=True, min_code=a.min_code, sources=sources)
+                        force=True, min_code=a.min_code, sources=sources,
+                        show_all=a.show_all)
 
     target.mkdir(parents=True, exist_ok=True)
     with Lock(target):

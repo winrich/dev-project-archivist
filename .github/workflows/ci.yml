@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: py${{ matrix.python }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.8", "3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # 零依赖项目：不需要 pip install，直接跑
+      # 用 discover 而不是逐个文件：新增测试文件不需要再改 CI，
+      # 否则「写了测试但 CI 里没跑」迟早会发生（0.1.0 时就只跑了两个文件）。
+      - name: 单元测试（全量）
+        run: python -m unittest discover -s scripts/tests -v
+
+      # 冒烟：空环境下也要能跑通、不崩、不写文件
+      - name: 空环境冒烟（scan --dry-run）
+        run: python scripts/archiver.py scan --dry-run
+
+      - name: 空环境冒烟（daylog 预览）
+        run: python scripts/archiver.py daylog
+
+      - name: 空环境冒烟（stats / find / restore 只读）
+        run: |
+          python scripts/archiver.py stats --days 1
+          python scripts/archiver.py find nothing-here || true
+          # restore 在没有快照时退出码为 1（设计如此：无内容可恢复），这里只验不崩
+          python scripts/archiver.py restore --date 2020-01-01 || true
+        shell: bash
+
+      # 落盘冒烟：空环境下也要能写出清点稿，且第二次运行必须无变化（幂等）
+      - name: 空环境冒烟（log 落盘 + 幂等）
+        run: |
+          python scripts/archiver.py log --date 2020-01-01 --out ./_logs_smoke
+          python scripts/archiver.py log --date 2020-01-01 --out ./_logs_smoke
+        shell: bash

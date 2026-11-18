@@ -15,6 +15,11 @@ agent_created: true
 - 「我用的是 Claude Code，也想把项目归档起来」
 - 「每天自动扫描新做的项目并同步变化」
 - 「归档目录要有个总索引，能看到每个项目是干什么的、用什么语言写的」
+- 「我上个月写过一个把批处理转 PowerShell 的脚本，在哪来着」→ `find`
+- 「这东西我之前是不是做过」→ `find 关键词`，比翻 `INDEX.md` 快得多
+- 「这周到底干了多少活 / token 花在哪了」→ `stats --days 7`（不估成本，只报用量）
+- 「给我一张图 / 发给领导看 / 我要截图」→ `report --days 30`（单文件 HTML，不含路径与指令原文）
+- 「上周那个版本哪去了 / 想看看 11 月 14 号是什么样」→ `restore --date 2026-11-14`（先预览，`--write` 才出副本）
 
 ## 设计目标（四条不可动摇的约束）
 
@@ -55,8 +60,13 @@ git clone https://github.com/winrich/dev-project-archivist.git ~/.workbuddy/skil
 python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py scan
 ```
 
-产出到目标目录：每个项目的 `source/`（纯源码）、`_docs/`（设计文档）、`manifest.json`、`_evidence/evidence.md`、`_meta/`、`打开原对话.bat`，并为项目目录初始化独立 git 仓库。
+产出到目标目录：每个项目的 `source/`（纯源码）、`_docs/`（设计文档）、`manifest.json`、`_evidence/evidence.md`、`_meta/`、`open-session.bat`，并为项目目录初始化独立 git 仓库。
 同时写 `_evidence/_pending.json`，列出**证据有变化、需要重新归纳**的项目。
+
+**提交信息**从「上次提交以来的对话指令」生成（`sync: <那天最主要的一件事> 等 N 项` + 逐条正文），
+所以 `git log` 是可读的时间线而不是一串 `sync: 同步 X 归档内容`。主题按信息量挑而非按时间挑
+（最新的那条常是「还是不行」）；先脱敏再截断；提到 `.ssh` / `.env` 的指令整条丢弃；
+没有可用指令时退回原文案，不编造。提交体带 `X-Archiver:` 标记，`git-clean` 据此判断能否安全重建。
 
 首次执行或改过规则后，先跑 `--dry-run` 校准分类：
 
@@ -120,7 +130,7 @@ python .../archiver.py render
 | 入口 | 位置 | 说明 |
 |---|---|---|
 | README「原始对话」表 | 每个项目 README | 每个会话一行，有深链时可点「打开对话」，否则标注「无深链」 |
-| `打开原对话.bat` | 项目根目录 | 双击直达最近一次会话；无深链平台改生成 `打开原对话.md` 写明恢复方式 |
+| `open-session.bat` | 项目根目录 | 双击直达最近一次会话；macOS/Linux 生成 `.command`/`.sh`；无深链平台改生成 `open-session.md` 写明恢复方式 |
 | `_meta/conversations.md` | 项目元数据目录 | 该项目**全部用户指令原文**按时间排列，不跳转也能看需求演进 |
 
 ## 常用命令
@@ -129,6 +139,8 @@ python .../archiver.py render
 |---|---|
 | `scan` | 采集/提取/复制源码，写证据包与 `_pending.json` |
 | `scan --dry-run` | 只打印分类表，零写入（首次校准必用） |
+| `scan --dry-run --all` | 连空壳会话一起列出（默认折叠，只报计数） |
+| `scan --explain [关键字]` | 打印判定依据：为什么算代码项目、名字取自哪个证据（零写入） |
 | `scan --force` | 忽略指纹强制重扫（换机、修规则后用） |
 | `scan --only 关键字` | 只处理名称/路径/会话标题命中关键字的项目 |
 | `scan --limit N` | 只处理最近 N 个项目 |
@@ -137,8 +149,84 @@ python .../archiver.py render
 | `run` | scan + render |
 | `--source all\|workbuddy\|claude-code` | 选择数据来源，默认 `all` 自动探测；可逗号组合 |
 | `pending` | 列出待归纳的证据包路径 |
-| `status` | 查看上次运行、失联项目、缺摘要项目 |
+| `status` | 查看上次运行、失联项目、缺摘要项目、`.git` 体积体检 |
 | `git-clean` | 重建由本工具创建的 git 仓库，清掉历史提交里的大对象 |
+| `daylog --date YYYY-MM-DD` | **零写入**按天汇总：指令→产出轮次、命令用途、token 用量 + 数据完整性体检（`--json` 输出机器可读） |
+| `daylog --merge-external` | 把工作区外的写入按仓库提升为独立行（默认只在体检里计数） |
+| `log --date YYYY-MM-DD` | 写出清点稿 `<target>/logs/YYYY-MM-DD.md`：确定性、幂等、已脱敏 |
+| `find 关键词` | 跨项目检索：名字/文件名/指令原文，多词全部命中（**只读，不加锁**） |
+| `find 关键词 --open` | 打开第一条命中的原对话 |
+| `find 关键词 --json` | 输出 JSON 供脚本消费（含 score / snippets） |
+| `stats --days 7` | **跨天账本**：最近 N 天的对话/项目/文件/token + 每日柱状（只读，`--date` 指定截止日，`--json` 机器可读） |
+| `report --days 30` | **写成单文件 HTML 账本**：热力图 + 柱状图 + 项目卡片（不含路径与指令原文，可直接分享；`--out` 指目录，`--open` 打开） |
+| `restore` | 列出能回到哪些天（各归档仓库有提交的日子，新→旧） |
+| `restore --date YYYY-MM-DD` | **预览**该日结束时的快照：每个项目取到哪个提交/多少文件/多大，零写入 |
+| `restore --date YYYY-MM-DD --write` | 展开成副本到 `<target>/_restore/<date>/`，**不覆盖归档**（`--only` 过滤，`--out` 换位置，`--force` 覆盖已有副本） |
+| `restore --json` | 输出 JSON（含 `commit` / `snapshot_at` / `files` / `bytes`） |
+
+## 按天汇总（`daylog`，只读）
+
+需要「某天做了什么」而不是「某个项目是什么」时用它。与归档共用转录，但按**事件时间**切天，
+因此跨天会话会被拆成多条，而不是只挂在首末时间上。
+
+```bash
+python .../archiver.py daylog --date 2026-11-18
+```
+
+**四条体检指标必须一起读**，不能只看表格：
+
+| 指标 | 含义 | 异常时的动作 |
+|---|---|---|
+| 无时间戳事件 | 事件前没有 ts，归不到任何一天 | 查适配器是否漏发 `ts` 事件 |
+| 工作区外写入 | 写盘落在 cwd 之外，未计入表格 | 占比高说明工作区划分与实际干活目录不一致 |
+| 重复指令压重 | 上下文压缩导致的原文重放已去掉 | 为 0 属正常，偏大说明会话历经多次压缩 |
+| 跨天会话 | 同一会话出现在多天 | 正常现象，说明按天切分生效 |
+| 无 token 记录的会话 | 该平台不写 usage | **留空，不可填 0**，否则「便宜」与「没数据」无法区分 |
+
+**token 口径**：`cache_read` 是 `input` 的子集（`total = input + output` 成立）。
+成本换算用 `全价部分 = input − cache_read`，两者不能相加。缓存命中率接近 99% 属长会话常态。
+
+`daylog` 目前不写任何文件、不调模型。指标异常时先修适配器，不要直接拿这张表去生成正式日志。
+
+## 落盘（`log`）
+
+```bash
+python .../archiver.py log --date 2026-11-18              # → <target>/logs/2026-11-18.md
+python .../archiver.py log --date 2026-11-18 --out ./logs
+```
+
+清点稿只写事实（项目、时段、指令→产出、token、区外改动、数据缺口），**不写「完成/进行中/阻塞」**：
+那需要读懂上下文，属模型职责；用启发式硬猜会产出具结论外形而无依据的内容。
+
+三条硬约束，改动时不能破：
+
+| 约束 | 表现 | 破坏后果 |
+|---|---|---|
+| 幂等 | 同样输入 → 同样字节，二次运行只打印「无变化」 | 定时任务每天产生无意义 diff，用户直接卸载 |
+| 脱敏 | 提示词过 `desensitize`；`.ssh`/`.aws`/`.env`/密钥路径只计数不列名 | 凭据位置被贴进群/日志系统 |
+| 隔离 | 只写 `logs/`，不碰归档目录 | 无法回退，档案被日志污染 |
+
+## 按日恢复（`restore`）
+
+```bash
+python .../archiver.py restore                            # 能回到哪些天
+python .../archiver.py restore --date 2026-11-14          # 预览，零写入
+python .../archiver.py restore --date 2026-11-14 --write  # → <target>/_restore/2026-11-14/
+```
+
+语义（回答用户时必须说清，含糊一句就会让人误以为这是备份/回滚）：
+
+| 是 | 不是 |
+|---|---|
+| 只从**归档仓库自己的 git 历史**取（`git archive`，不碰工作区与索引） | 不从原工作区取——原工作区可能已删除或改写 |
+| 「**该日结束时**归档里长什么样」 | **不是「那天改了什么」**（那是 `log` / `stats`） |
+| 只含**当时已归档**的文件 | 不是备份：媒体、超大二进制、敏感路径、`.gitignore` 排除项、首次归档之前的文件都不在快照里 |
+
+两条边界必须显式报告，不能静默少一行：某天没跑归档 → 退到更早的最近一次提交并打出它的真实时间；
+项目晚于目标日才首次归档 → 归入「无法恢复」并写明首次归档日期。
+
+**永不覆盖归档**：写入点固定为当天新建的独立目录；同日再写默认拒绝（`--force` 才覆盖）；
+总量超 800MB 需 `--force` 确认。副本不带 `.git`，并附 `_restore.md` / `_restore.json` 记录每个项目的来源 commit。
 
 ## 输出结构
 
@@ -150,13 +238,14 @@ python .../archiver.py render
 ├── overrides.json    # 人工校正表：改标题/背景/用途/类型，keep_scripts 放行脚本，skip 排除工作区
 ├── state.json        # 指纹库，增量同步的依据
 ├── _trash/           # 不再归档的项目目录（软删除，可人工恢复）
+├── _restore/         # restore 产出的历史快照副本（归档本身不动）
 ├── _evidence/_pending.json
 └── 2026-03-15_批量重命名工具/
     ├── README.md          # 项目背景/功能说明/技术实现/源码/原始对话/概览
     ├── manifest.json      # 元数据 + 剔除清单 + 外部依赖清单
     ├── .gitignore         # 已排除构建产物，仓库可直接推送远端
     ├── .git/              # 独立仓库，首次归档即完成 init + commit
-    ├── 打开原对话.bat      # 双击跳回最近一次会话
+    ├── open-session.bat  # 双击跳回最近一次会话
     ├── source/            # 纯源码，保持原相对路径
     ├── _docs/             # 设计文档（docx/pdf 等），不进 source
     ├── _evidence/evidence.md

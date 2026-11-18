@@ -7,6 +7,7 @@
 > Software built through chat becomes unfindable within three months. This tool goes and gets it back.
 
 <p align="center">
+  <a href="https://github.com/winrich/dev-project-archivist/releases"><img src="https://img.shields.io/github/v/release/winrich/dev-project-archivist?color=blueviolet" alt="Release"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/github/license/winrich/dev-project-archivist" alt="License"></a>
   <img src="https://img.shields.io/badge/python-3.8%2B-blue.svg" alt="Python 3.8+">
   <img src="https://img.shields.io/badge/dependencies-0-brightgreen.svg" alt="Zero dependencies">
@@ -77,12 +78,33 @@ This tool contains no project data. It only turns **local sessions** into a sour
 
 ## 🧠 Understand it in 30 seconds
 
+Commands come in two groups — don't mix up their frequency:
+**`scan` / `render` run a few times a month; `find` / `stats` are for every day.**
+
+**First time (one-off)**
+
 ```bash
-# 1. Inspect the classification — writes nothing
+# 1. Inspect the classification — writes nothing. Run this first.
 python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py scan --dry-run
 
-# 2. Archive for real
+# 2. Happy with the table? Archive for real (scan + render)
 python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py run
+```
+
+**Everyday use (read-only, writes nothing)**
+
+```bash
+# Find things: project names / file names / prompt text, all words must match
+python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py find "batch convert"
+
+# How much did this week cost you: prompts / projects / files / tokens
+python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py stats --days 7
+
+# Something to show a colleague (single-file HTML)
+python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py report --days 30 --open
+
+# What the archive looked like last Wednesday (preview first, --write to expand)
+python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py restore --date 2026-11-14
 ```
 
 The first command only prints a table: how many project units were found, which are code projects, which are pure document tasks. **Run it first** and confirm the classification before anything is written.
@@ -174,11 +196,12 @@ This is not a throwaway archiving script — every rule below was written after 
 ├── overrides.json    # Manual corrections: title / background / purpose, keep_scripts for false positives
 ├── state.json        # Fingerprint store — the basis for incremental sync
 ├── _trash/           # Directories no longer archived (soft delete, recoverable)
+├── _restore/         # Historical snapshots produced by `restore` (archive untouched)
 └── 2026-03-15_批量重命名工具/
     ├── README.md          # Background / features / implementation / source / sessions / overview
     ├── manifest.json      # Metadata + exclusion log + external dependency list
     ├── .gitignore  .git/  # Standalone repo, init + commit on first archive
-    ├── 打开原对话.bat      # Double-click to jump back to the latest session
+    ├── open-session.bat  # Double-click to jump back to the latest session
     ├── source/            # Clean source, original relative paths preserved
     ├── _docs/             # Design documents (docx/pdf etc.)
     ├── _evidence/evidence.md
@@ -300,8 +323,8 @@ The jump mechanism depends on the session's source; tools without deep-link supp
 
 | Platform | How to open |
 |---|---|
-| WorkBuddy | Click "打开对话" in the README, or double-click `打开原对话.bat` in the project root |
-| Claude Code | `打开原对话.md` in the project root records the session ID and a `claude --resume <ID>` command |
+| WorkBuddy | Click "打开对话" in the README, or run `open-session.bat` in the project root (`.command` on macOS, `.sh` on Linux) |
+| Claude Code | `open-session.md` in the project root records the session ID and a `claude --resume <ID>` command |
 
 Regardless of platform, every project has `_meta/conversations.md` — all user instructions for that project in chronological order, so you can see the requirement evolution without jumping anywhere.
 
@@ -313,6 +336,8 @@ Regardless of platform, every project has `_meta/conversations.md` — all user 
 |---|---|
 | `scan` | Collect / extract / copy source, write the evidence pack and the pending-summarisation list |
 | `scan --dry-run` | Print the classification table only, zero writes (**use first to calibrate**) |
+| `scan --dry-run --all` | Also list empty-shell sessions (collapsed by default) |
+| `scan --explain [KEYWORD]` | Print why a project was classified this way and where its name came from (read-only) |
 | `scan --force` | Ignore fingerprints and rescan (after switching machines or changing rules) |
 | `scan --only KEYWORD` | Only process projects matching the keyword in name / path / session title / archive dir |
 | `scan --limit N` | Only process the N most recent projects |
@@ -320,8 +345,67 @@ Regardless of platform, every project has `_meta/conversations.md` — all user 
 | `run` | scan + render |
 | `--source all\|workbuddy\|claude-code` | Choose data source(s). Default `all` auto-detects; comma-separated allowed |
 | `pending` | List projects whose evidence changed and need re-summarising |
-| `status` | Last run time, lost projects, projects missing summaries |
+| `status` | Last run time, lost projects, projects missing summaries, `.git` size check |
 | `git-clean` | Rebuild the repositories this tool created, purging large objects from history |
+| `find KEYWORD` | **Cross-project search**: names / file names / prompt text. All words must match. Read-only |
+| `find KEYWORD --open` | Open the original conversation of the top hit |
+| `find KEYWORD --json` | Machine-readable output (score + snippets) |
+| `stats --days 7` | **Cross-day ledger**: prompts / projects / files / tokens for the last N days, plus a daily bar (read-only; `--date` sets the end date, `--json` for scripts) |
+| `report --days 30` | **Write a single-file HTML ledger**: heatmap + bar chart + project cards. No paths, no prompt text — safe to share (`--out` dir, `--open` to launch) |
+| `restore` | List **which days you can go back to** (days on which the archive repos have commits) |
+| `restore --date 2026-11-14` | **Preview** the snapshot as of that day's end: projects / files / size, zero writes |
+| `restore --date 2026-11-14 --write` | Expand a copy into `<target>/_restore/2026-11-14/` — **never overwrites the archive** |
+| `restore --date 2026-11-14 --write --only KEYWORD` | Restore only matching projects |
+| `restore --date 2026-11-14 --json` | Machine-readable output |
+
+---
+
+## ⏪ Going back to a given day: `restore`
+
+An archive is worth more than "one more look" — it is worth **being able to rewind**. Every project
+directory is its own git repo with one commit per scan, so "what did the archive look like on 14 Nov"
+is a question with an exact answer:
+
+```bash
+python .../archiver.py restore                            # 1. which days can I go back to
+python .../archiver.py restore --date 2026-11-14          # 2. preview, zero writes
+python .../archiver.py restore --date 2026-11-14 --write  # 3. expand a copy for real
+```
+
+### Three semantics — read these before the flags
+
+| It is | It is not |
+|---|---|
+| Taken **only from each archive repo's own git history** | Not taken from the original workspace — which may be long deleted, renamed or overwritten |
+| "What the archive looked like **at the end of that day**" | **Not "what changed that day"** — for that use `log` / `stats` |
+| Only files that were **already archived at the time** | Not a backup. Media, oversized binaries, sensitive paths, `.gitignore`-excluded build output, and anything **before the first archive** were never in git and cannot be conjured back |
+
+Two boundaries follow, and both are reported explicitly rather than silently skipped:
+
+- **No scan ran that day** → there is no snapshot for it; `restore` falls back to the **most recent earlier commit** and prints that commit's real timestamp, never pretending it was that day
+- **A project was first archived after the target date** → it is listed under "cannot restore" with the reason: `no archive before that date (first archived 2026-11-16)`
+
+### It never overwrites the archive
+
+The classic way to get "go back to a day" wrong is to overwrite the current archive in place, so this is
+a hard constraint: `restore` only **reads** the archive repos (`git archive`, never touching the working
+tree or the index) and writes into a fresh directory.
+
+| Flag | Behaviour |
+|---|---|
+| default (no `--write`) | Preview only: which commit each project resolves to, file count, size — **zero writes** |
+| `--write` | Expand into `<target>/_restore/<date>/<project>/`; the archive is byte-for-byte unchanged |
+| `--out DIR` | Write the copy somewhere else |
+| `--only KEYWORD` | Restore only matching projects |
+| `--force` | Overwrite an existing copy for the same day; confirm a total above 800 MB |
+| `--json` | Machine-readable (`commit` / `snapshot_at` / `files` / `bytes` per project) |
+
+Each expanded copy carries `_restore.md` + `_restore.json` recording **which commit** every project came
+from, so the result can be audited later. The copy has no `.git` — open it or build it directly.
+
+> Need to rewind **one** project in place? You don't need this command: the archive directory is already
+> a repo — `cd` into the project, pick a commit in `git log` and `git checkout <sha> -- .`.
+> `restore` is for the other job: getting a copy you can open and build without touching today's archive.
 
 ---
 
@@ -385,15 +469,27 @@ Whoever clones it can pick up where you left off using the "Implementation" sect
 dev-project-archivist/
 ├── SKILL.md                        # Skill entry: trigger conditions and execution rules
 ├── README.md  README.en.md         # Chinese / English docs
+├── CHANGELOG.md                    # Release history and versioning rule
+├── pyproject.toml                  # Installable via pipx / uvx (still zero dependencies)
+├── .github/workflows/ci.yml        # 2 OS x 3 Python versions, full unittest discover
 ├── scripts/
-│   ├── archiver.py                 # Pipeline core (~2300 lines, standard library only)
+│   ├── archiver.py                 # Core: archive / log / find / stats / report / restore
 │   ├── adapters/
 │   │   ├── base.py                 # Neutral event contract, Adapter base, multi-source index
 │   │   ├── workbuddy.py            # WorkBuddy session index and parser
 │   │   ├── claude_code.py          # Claude Code JSONL parser
 │   │   └── __init__.py             # Registry and --source selection
-│   └── tests/
-│       └── test_adapters.py        # Adapter unit tests
+│   └── tests/                      # 210 tests, all runnable offline
+│       ├── test_adapters.py        # Adapter unit tests
+│       ├── test_daylog.py          # Per-day aggregation (nothing lost or double counted)
+│       ├── test_naming.py          # Name evidence chain and title cleanup
+│       ├── test_find.py            # Search scoring and per-kind saturation
+│       ├── test_commit_msg.py      # Commit message generation
+│       ├── test_stats.py           # Cross-day ledger, same numbers as daylog
+│       ├── test_report.py          # HTML report structure and redaction
+│       ├── test_restore.py         # Restore semantics (throwaway git repos)
+│       ├── test_release.py         # Version number consistent in all three places
+│       └── test_public_content.py  # Leak guard: competitor name / home paths with a username
 ├── references/
 │   ├── automation-prompt.md        # Copy-pasteable prompt for the nightly job
 │   └── data-sources.md             # Local data source structures (troubleshooting)
@@ -414,9 +510,13 @@ Issues and PRs are welcome. Especially useful:
 Before submitting, please run:
 
 ```bash
-python scripts/tests/test_adapters.py
+python -m unittest discover -s scripts/tests   # full suite, 210 tests, offline
 python scripts/archiver.py scan --dry-run
 ```
+
+Changes go into [CHANGELOG.md](CHANGELOG.md). Its header states the rule: the version equals the highest
+completed milestone, and `pyproject.toml` / `__version__` / the top CHANGELOG entry must agree
+(`test_release.py` fails otherwise).
 
 ---
 

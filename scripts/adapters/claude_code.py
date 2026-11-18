@@ -20,7 +20,7 @@
   2. tool_result 的 content 可能是字符串或数组，两种都要接。
   3. 子代理记录带 isSidechain=true，混在主文件里，必须过滤。
   4. 用户消息里混有 isMeta 记录、`[Request interrupted` 中断标记，不算真实提问。
-  5. 同一条 assistant 消息按内容块逐行写入，usage 会重复；本适配器不读 usage，故无影响。
+  5. 同一条 assistant 消息按内容块逐行写入，每行都带同一份 usage，必须按 message.id 去重。
   6. 时间戳是 ISO 8601 字符串，但索引层必须转成毫秒整数，否则与 WorkBuddy 混排会崩。
 """
 
@@ -29,8 +29,9 @@ import os
 from pathlib import Path
 
 from .base import (Adapter, ERROR_HINT, EV_ASSISTANT, EV_PROMPT, EV_TITLE,
-                   EV_TOOL, EV_TOOL_RESULT, EV_TS, EV_WRITE, Index,
-                   clean_prompt, iso_to_ms, rel_in_cwd)
+                   EV_TOOL, EV_TOOL_RESULT, EV_TS, EV_WRITE, Index, TOOL_SHELL,
+                   clean_prompt, extract_cmd, iso_to_ms, rel_in_cwd,
+                   safe_lines, tool_type, usage_event)
 
 CLAUDE_HOME = Path.home() / ".claude"
 PROJECTS_DIR = CLAUDE_HOME / "projects"
@@ -39,6 +40,8 @@ PROJECTS_DIR = CLAUDE_HOME / "projects"
 HEAD_SCAN_LINES = 60
 # 会话里可视为「写入完整文件」的工具名（Edit 只有片段，无法还原全文，不记内容）
 WRITE_TOOLS = ("Write",)
+# 会改动文件的全部工具：非 Write 的只发路径，不发正文
+EDIT_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
 # 这些 type 只承载元信息，不产生对话事件
 SKIP_TYPES = ("summary", "system", "attachment", "queue-operation", "pr-link",
               "result", "file-history-snapshot")
@@ -57,16 +60,15 @@ def _block_text(content) -> str:
 def _iter_lines(path):
     """逐行产出已解析的 JSON 对象；解析失败的行静默跳过（半行写入是常态）。"""
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                if not line.strip():
-                    continue
-                try:
-                    o = json.loads(line)
-                except Exception:
-                    continue
-                if isinstance(o, dict):
-                    yield o
+        for line in safe_lines(path):
+            if not line.strip():
+                continue
+            try:
+                o = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(o, dict):
+                yield o
     except Exception as e:
         print(f"  [warn] 解析失败 {Path(path).name}: {e}", flush=True)
 
@@ -153,11 +155,13 @@ class ClaudeCodeAdapter(Adapter):
         return ClaudeCodeIndex().load()
 
     def iter_events(self, path, cwd: str = ""):
+        seen_msg = set()          # 同一 assistant 消息按内容块拆成多行，usage 会重复
         for o in _iter_lines(path):
             if o.get("isSidechain"):
                 continue          # 子代理的记录不属于主对话
-            ts = o.get("timestamp")
+            ts = iso_to_ms(o.get("timestamp"))
             if ts:
+                # 契约要求毫秒整数：ISO 字符串直接下行，与 WorkBuddy 的毫秒混排会崩
                 yield {"kind": EV_TS, "value": ts}
             t = o.get("type")
             if t in ("custom-title", "ai-title"):
@@ -168,6 +172,16 @@ class ClaudeCodeAdapter(Adapter):
                 for ev in self._user_events(o):
                     yield ev
             elif t == "assistant":
+                msg = o.get("message")
+                if isinstance(msg, dict):
+                    # 一条 assistant 消息按内容块逐行落盘，每行都带同一份 usage；
+                    # 不按 message.id 去重会把 token 重复计 2–5 倍。
+                    mid = msg.get("id") or o.get("uuid") or ""
+                    if mid not in seen_msg:
+                        seen_msg.add(mid)
+                        u = usage_event(msg.get("usage"))
+                        if u:
+                            yield u
                 for ev in self._assistant_events(o, cwd):
                     yield ev
             elif t in SKIP_TYPES:
@@ -218,19 +232,30 @@ class ClaudeCodeAdapter(Adapter):
                     yield {"kind": EV_ASSISTANT, "text": txt}
             elif ty == "tool_use":
                 name = b.get("name") or ""
-                yield {"kind": EV_TOOL, "name": name}
-                if name not in WRITE_TOOLS:
-                    continue
                 inp = b.get("input")
+                ev = {"kind": EV_TOOL, "name": name}
+                # Bash 之类带上首行命令，日志才能区分「跑测试」和「跑构建」
+                if tool_type(name) == TOOL_SHELL and isinstance(inp, dict):
+                    cmd = extract_cmd(inp)
+                    if cmd:
+                        ev["cmd"] = cmd
+                yield ev
+                if name not in EDIT_TOOLS:
+                    continue
                 if not isinstance(inp, dict):
                     continue
-                fp = inp.get("file_path") or inp.get("path") or inp.get("target_file") or ""
+                fp = (inp.get("file_path") or inp.get("filePath")
+                      or inp.get("path") or inp.get("target_file")
+                      or inp.get("notebook_path") or inp.get("notebookPath") or "")
+                op = "write" if name in WRITE_TOOLS else "edit"
                 rel = rel_in_cwd(fp, cwd)
                 if not rel:
+                    if fp:
+                        yield {"kind": EV_WRITE, "rel": "", "external": str(fp), "op": op}
                     continue
-                body = inp.get("content")
-                if isinstance(body, str) and body:
-                    yield {"kind": EV_WRITE, "rel": rel, "content": body}
+                body = inp.get("content") if name in WRITE_TOOLS else ""
+                yield {"kind": EV_WRITE, "rel": rel, "op": op,
+                       "content": body if isinstance(body, str) else ""}
 
     # ---------- 回跳与补充信息
     def deep_link(self, sid: str) -> str:

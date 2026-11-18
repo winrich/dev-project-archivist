@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dev-project-archivist"
+version = "0.3.0"
+description = "把散落在 AI 对话窗口里的软件项目，收拢成可浏览、可移交、可长期同步的本地源码档案"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+keywords = ["ai-coding", "claude-code", "cursor", "archive", "session", "cli"]
+classifiers = [
+    "Environment :: Console",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Version Control :: Git",
+]
+# 刻意保持为空：归档逻辑只用标准库，装的时候不该拖任何依赖
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/winrich/dev-project-archivist"
+Issues = "https://github.com/winrich/dev-project-archivist/issues"
+
+[project.scripts]
+archiver = "archiver:main"
+
+[tool.setuptools]
+package-dir = { "" = "scripts" }
+py-modules = ["archiver"]
+packages = ["adapters"]
