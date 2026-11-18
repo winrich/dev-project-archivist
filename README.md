@@ -120,6 +120,116 @@ python .../archiver.py run --target "D:\我的归档"
 
 ---
 
+## 👀 长什么样
+
+先看产物，再决定要不要往下读。
+
+### 账本页：`report`
+
+<p align="center">
+  <img src="docs/img/report-demo.png" alt="report 生成的单文件 HTML：四张总览卡、日历热力图、每日对话量、按对话量排序的项目卡" width="820">
+</p>
+
+一份自包含的 HTML：双击就开，不发网络请求、不加载字体，能直接发给别人。四张总览卡（对话 / 项目 / 改动文件 / token）、日历热力图、每日对话量柱状图、按对话量排的项目卡。
+
+**能分享，和敢分享，是两件事**：页面里没有工作区路径，没有指令原文，唯一的外链是页脚那几个字。
+
+> 这张图来自 [`docs/sample/report-demo.html`](docs/sample/report-demo.html)，由 [`docs/sample/build_sample.py`](docs/sample/build_sample.py)
+> 喂**虚构数据**给**同一个渲染函数**生成——项目名和数字都是编的，版式和你自己跑出来的那份一致。
+> 改了样式，样例跟着变，不会漂。
+
+### 终端里
+
+四段都是真实输出格式，数字同为虚构。
+
+**首次：先看分类，不写任何文件**
+
+```text
+$ python .../archiver.py scan --dry-run
+[1/5] 会话索引：214 个会话，198 份转录
+[2/5] 归并完成：23 个项目单元
+
+日期        类型      语言              码   档  文件  项目
+---------------------------------------------------------------------------------------------------
+2026-10-20  代码项目  C#               298   14   312  BatchRenamer batch-renamer
+2026-10-22  代码项目  Python            88    8    96  order-sync order-sync
+2026-10-25  代码项目  Python            61   10    71  报表导出器 report-export
+2026-10-27  混合产物  Python            44   14    58  InvoiceParser invoice-parser
+2026-11-04  代码项目  TypeScript        15    3    18  CDN cdn-tools
+2026-11-06  文档任务  —                  0   12    12  some-plugin some-plugin
+---------------------------------------------------------------------------------------------------
+小计：代码项目 12 / 文档任务 8 / 混合产物 3 / 空壳 0
+```
+
+**每天：找东西**
+
+```text
+$ python .../archiver.py find "批处理 PowerShell"
+
+2 条命中 · 用时 0.19s
+
+InvoiceParser  ·  2026-11-12 → 2026-11-15  ·  评分 24
+  工作区  D:/code/invoice-parser
+  [指令] 2026-11-12 21:04  写个批处理把 build.bat 转成 ps1，顺便带上参数
+  [文件] source/tools/convert.ps1
+
+  → 直接回场：archiver.py find "批处理 PowerShell" --open
+```
+
+**每周：这周干了多少**
+
+```text
+$ python .../archiver.py stats --days 7
+
+  最近 7 天 · 2026-11-12 → 2026-11-18
+
+  对话 60 · 会话 19 · 项目 5 · 改动文件 143（写 96 / 改 47）
+  Token 输入 4.2M（缓存命中 82%）· 输出 900.0k · 合计 5.1M
+  成本：不估算（模型归属常为 auto，拿默认单价顶替等于编数字）
+
+  每日对话  ▂▁▅▆▃█▂
+
+  日期         对话   项目   文件    token
+  ----------------------------------------
+  11-12           2      1      5   210.0k
+  11-13           0      0      0        0
+  11-14          12      3     28     1.0M
+  11-15          16      3     38     1.4M
+  11-16           6      2     14   510.0k
+  11-17          21      4     50     1.8M
+  11-18           3      1      8   260.0k
+
+  最活跃项目
+      21 对话 ·  50 文件 ·    1.8M tok   BatchRenamer
+      18 对话 ·  41 文件 ·    1.5M tok   order-sync
+      11 对话 ·  33 文件 ·  940.0k tok   报表导出器
+
+  空白天    11-13（没有会话）
+```
+
+**备份：推之前先看清楚**
+
+```text
+$ python .../archiver.py sync
+
+  归档仓库 8 个 · 配了远端 6 个 · 有未提交改动 3 个 · 待推送 5 个提交
+
+  仓库                      分支     远端                           待提交  待推送
+  ------------------------------------------------------------------------------
+  BatchRenamer              main     github.com/me/batch-renamer         2      +2
+  order-sync                main     github.com/me/order-sync            -       -
+  报表导出器                main     github.com/me/report-export         1      +3
+  InvoiceParser             main     github.com/me/invoice-parser        -      +2
+
+  2 个仓库没配远端（不会推送）。要备份到自己的仓库，在归档目录里各执行一次：
+      git remote add origin <你的仓库地址>
+  之后 `sync --push` 就会带上它们。
+
+  这是预览，没有提交也没有推送。加 --push 才执行。
+```
+
+---
+
 ## 🏗️ 工作流程
 
 ```mermaid
@@ -483,6 +593,8 @@ python .../archiver.py report --days 30 --open
 ```
 
 页面上一共四块：四张总览卡（对话 / 项目 / 改动文件 / token）、日历热力图 + 三条事实（最忙的一天、活跃天数、平均每天）、每日对话量柱状图、按对话量排序的项目卡片。浅色深色都跟系统走，窄屏自动单列。
+
+效果见上面「👀 长什么样」那张图；想直接打开看，`docs/sample/report-demo.html` 就是它（虚构数据，可离线打开、可改、可截图）。
 
 **能分享，和敢分享，是两件事。** 报告默认做了这些取舍：
 

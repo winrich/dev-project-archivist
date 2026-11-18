@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI 开发账本 · 2026-10-20 → 2026-11-18</title>
+<style>
+*{box-sizing:border-box}
+:root{
+  --bg:#fbfaf8;--card:#fff;--ink:#15171c;--muted:#767b86;--line:#e8e5df;--acc:#0f766e;
+  --h0:#efece6;--h1:#cfe4df;--h2:#9bc9c1;--h3:#4fa79b;--h4:#0f766e;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#0f1115;--card:#161a20;--ink:#e9ebef;--muted:#8d94a0;--line:#242a33;
+        --acc:#2dd4bf;--h0:#1d232b;--h1:#1e3b3a;--h2:#245a56;--h3:#2b7f77;--h4:#2dd4bf}
+}
+body{margin:0;background:var(--bg);color:var(--ink);
+     font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",
+          "Hiragino Sans GB","Microsoft YaHei",sans-serif;
+     -webkit-font-smoothing:antialiased}
+main{max-width:760px;margin:0 auto;padding:56px 24px 44px}
+.eyebrow{margin:0 0 10px;font-size:11px;letter-spacing:.18em;text-transform:uppercase;
+         color:var(--muted)}
+h1{margin:0 0 8px;font-size:34px;line-height:1.2;letter-spacing:-.01em}
+.sub{margin:0;font-size:13px;color:var(--muted)}
+.kpi{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);
+     border:1px solid var(--line);border-radius:12px;overflow:hidden;margin:32px 0 0}
+.kpi div{background:var(--card);padding:15px 14px}
+.kv{display:block;font-size:23px;font-weight:600;letter-spacing:-.02em;
+    font-variant-numeric:tabular-nums}
+.kl{display:block;margin-top:2px;font-size:11px;color:var(--muted)}
+section{margin-top:40px}
+h2{margin:0 0 14px;font-size:11px;font-weight:600;letter-spacing:.12em;
+   text-transform:uppercase;color:var(--muted)}
+.heat{display:grid;grid-auto-flow:column;grid-auto-columns:17px;
+      grid-template-rows:repeat(7,17px);gap:4px}
+.heat i{display:block;width:17px;height:17px;border-radius:3px;background:var(--h0)}
+.heat i.blank{background:transparent}
+.heat i.h1{background:var(--h1)}.heat i.h2{background:var(--h2)}
+.heat i.h3{background:var(--h3)}.heat i.h4{background:var(--h4)}
+.split{display:grid;grid-template-columns:auto 1fr;gap:28px;align-items:center}
+.cap{margin:8px 0 0;font-size:11px;color:var(--muted)}
+.facts{display:grid;gap:9px;margin:0}
+.facts div{display:flex;justify-content:space-between;gap:14px;padding-bottom:8px;
+           border-bottom:1px dashed var(--line);font-size:12.5px}
+.facts div:last-child{border-bottom:0;padding-bottom:0}
+.facts dt{color:var(--muted)}
+.facts dd{margin:0;font-variant-numeric:tabular-nums}
+.facts.h{grid-template-columns:repeat(3,1fr);gap:18px}
+.facts.h div{display:block;padding-bottom:0;border-bottom:0}
+.facts.h dt{margin-bottom:3px}
+.facts.h dd{font-size:17px;font-weight:600;color:var(--ink)}
+.chart{color:var(--acc)}
+.chart svg{display:block;width:100%;height:auto}
+.chart rect{fill:currentColor;opacity:.82}
+.chart .base{stroke:var(--line);stroke-width:1;fill:none}
+.axis{display:flex;justify-content:space-between;margin-top:8px;font-size:11px;
+      color:var(--muted);font-variant-numeric:tabular-nums}
+.proj{list-style:none;margin:0;padding:0;display:grid;gap:16px}
+.prow{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.pn{font-weight:500;overflow-wrap:anywhere}
+.pv{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+.pbar{height:4px;margin:7px 0 6px;border-radius:2px;background:var(--h0);overflow:hidden}
+.pbar i{display:block;height:100%;border-radius:2px;background:var(--acc)}
+.pm{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.empty{margin:14px 0 0;font-size:12px;color:var(--muted)}
+footer{display:flex;flex-wrap:wrap;gap:10px 18px;justify-content:space-between;
+       margin-top:52px;padding-top:18px;border-top:1px solid var(--line);
+       font-size:12px;color:var(--muted)}
+footer a{color:inherit;text-decoration:none;border-bottom:1px solid var(--line)}
+@media (max-width:560px){
+  main{padding:36px 18px 32px}h1{font-size:27px}
+  .kpi{grid-template-columns:repeat(2,1fr)}
+  .split{grid-template-columns:1fr;gap:20px}
+}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <p class="eyebrow">AI 开发账本</p>
+  <h1>最近 30 天</h1>
+  <p class="sub">2026-10-20 → 2026-11-18 · 70 个会话 · 671 次写、1006 次改</p>
+</header>
+<section class="kpi"><div><span class="kv">211</span><span class="kl">条对话</span></div><div><span class="kv">8</span><span class="kl">个项目</span></div><div><span class="kv">478</span><span class="kl">个改动文件</span></div><div><span class="kv">22.3M</span><span class="kl">token</span></div></section>
+<section>
+  <h2>每天的活跃度</h2>
+  <div class="split"><div><div class="heat"><i class="blank"></i><i class="h1" title="2026-10-20 · 对话 2 · 文件 5 · 211.4k tok"></i><i class="h0" title="2026-10-21 · 对话 0 · 文件 0 · 0 tok"></i><i class="h2" title="2026-10-22 · 对话 6 · 文件 14 · 634.1k tok"></i><i class="h2" title="2026-10-23 · 对话 10 · 文件 23 · 1.1M tok"></i><i class="h1" title="2026-10-24 · 对话 5 · 文件 11 · 528.4k tok"></i><i class="h1" title="2026-10-25 · 对话 2 · 文件 5 · 211.4k tok"></i><i class="h0" title="2026-10-26 · 对话 0 · 文件 0 · 0 tok"></i><i class="h2" title="2026-10-27 · 对话 8 · 文件 18 · 845.5k tok"></i><i class="h3" title="2026-10-28 · 对话 15 · 文件 34 · 1.6M tok"></i><i class="h2" title="2026-10-29 · 对话 6 · 文件 14 · 634.1k tok"></i><i class="h1" title="2026-10-30 · 对话 4 · 文件 9 · 422.7k tok"></i><i class="h1" title="2026-10-31 · 对话 1 · 文件 2 · 105.7k tok"></i><i class="h0" title="2026-11-01 · 对话 0 · 文件 0 · 0 tok"></i><i class="h3" title="2026-11-02 · 对话 11 · 文件 25 · 1.2M tok"></i><i class="h4" title="2026-11-03 · 对话 17 · 文件 39 · 1.8M tok"></i><i class="h2" title="2026-11-04 · 对话 7 · 文件 16 · 739.8k tok"></i><i class="h1" title="2026-11-05 · 对话 3 · 文件 7 · 317.1k tok"></i><i class="h0" title="2026-11-06 · 对话 0 · 文件 0 · 0 tok"></i><i class="h1" title="2026-11-07 · 对话 4 · 文件 9 · 422.7k tok"></i><i class="h3" title="2026-11-08 · 对话 15 · 文件 34 · 1.6M tok"></i><i class="h4" title="2026-11-09 · 对话 21 · 文件 48 · 2.2M tok"></i><i class="h2" title="2026-11-10 · 对话 8 · 文件 18 · 845.5k tok"></i><i class="h2" title="2026-11-11 · 对话 6 · 文件 14 · 634.1k tok"></i><i class="h1" title="2026-11-12 · 对话 2 · 文件 5 · 211.4k tok"></i><i class="h0" title="2026-11-13 · 对话 0 · 文件 0 · 0 tok"></i><i class="h3" title="2026-11-14 · 对话 12 · 文件 27 · 1.3M tok"></i><i class="h4" title="2026-11-15 · 对话 16 · 文件 36 · 1.7M tok"></i><i class="h2" title="2026-11-16 · 对话 6 · 文件 14 · 634.1k tok"></i><i class="h4" title="2026-11-17 · 对话 21 · 文件 48 · 2.2M tok"></i><i class="h1" title="2026-11-18 · 对话 3 · 文件 7 · 317.1k tok"></i></div><p class="cap">每格一天，颜色越深对话越多</p></div><dl class="facts"><div><dt>最忙的一天</dt><dd>2026-11-09 · 21 条</dd></div><div><dt>活跃天数</dt><dd>25 / 30 天</dd></div><div><dt>平均每天</dt><dd>7.0 条对话</dd></div></dl></div>
+  <p class="empty">输入 18.4M（缓存命中 82%）· 输出 3.9M</p><p class="empty">Token 只统计、不折算成本：模型归属常为 auto，按默认单价算等于编数字</p><p class="empty">其中 5 天没有会话</p>
+</section>
+<section>
+  <h2>每日对话量</h2>
+  <div class="chart"><svg viewBox="0 0 720 104" role="img" aria-label="每日对话量"><line x1="0" y1="104" x2="720" y2="104" class="base"/><rect x="4.3" y="94.3" width="15.4" height="9.7" rx="1.2"><title>2026-10-20 · 对话 2 · 文件 5 · 211.4k tok</title></rect><rect x="28.3" y="104.0" width="15.4" height="1.6" rx="1.2"><title>2026-10-21 · 对话 0 · 文件 0 · 0 tok</title></rect><rect x="52.3" y="74.9" width="15.4" height="29.1" rx="1.2"><title>2026-10-22 · 对话 6 · 文件 14 · 634.1k tok</title></rect><rect x="76.3" y="55.4" width="15.4" height="48.6" rx="1.2"><title>2026-10-23 · 对话 10 · 文件 23 · 1.1M tok</title></rect><rect x="100.3" y="79.7" width="15.4" height="24.3" rx="1.2"><title>2026-10-24 · 对话 5 · 文件 11 · 528.4k tok</title></rect><rect x="124.3" y="94.3" width="15.4" height="9.7" rx="1.2"><title>2026-10-25 · 对话 2 · 文件 5 · 211.4k tok</title></rect><rect x="148.3" y="104.0" width="15.4" height="1.6" rx="1.2"><title>2026-10-26 · 对话 0 · 文件 0 · 0 tok</title></rect><rect x="172.3" y="65.1" width="15.4" height="38.9" rx="1.2"><title>2026-10-27 · 对话 8 · 文件 18 · 845.5k tok</title></rect><rect x="196.3" y="31.1" width="15.4" height="72.9" rx="1.2"><title>2026-10-28 · 对话 15 · 文件 34 · 1.6M tok</title></rect><rect x="220.3" y="74.9" width="15.4" height="29.1" rx="1.2"><title>2026-10-29 · 对话 6 · 文件 14 · 634.1k tok</title></rect><rect x="244.3" y="84.6" width="15.4" height="19.4" rx="1.2"><title>2026-10-30 · 对话 4 · 文件 9 · 422.7k tok</title></rect><rect x="268.3" y="99.1" width="15.4" height="4.9" rx="1.2"><title>2026-10-31 · 对话 1 · 文件 2 · 105.7k tok</title></rect><rect x="292.3" y="104.0" width="15.4" height="1.6" rx="1.2"><title>2026-11-01 · 对话 0 · 文件 0 · 0 tok</title></rect><rect x="316.3" y="50.6" width="15.4" height="53.4" rx="1.2"><title>2026-11-02 · 对话 11 · 文件 25 · 1.2M tok</title></rect><rect x="340.3" y="21.4" width="15.4" height="82.6" rx="1.2"><title>2026-11-03 · 对话 17 · 文件 39 · 1.8M tok</title></rect><rect x="364.3" y="70.0" width="15.4" height="34.0" rx="1.2"><title>2026-11-04 · 对话 7 · 文件 16 · 739.8k tok</title></rect><rect x="388.3" y="89.4" width="15.4" height="14.6" rx="1.2"><title>2026-11-05 · 对话 3 · 文件 7 · 317.1k tok</title></rect><rect x="412.3" y="104.0" width="15.4" height="1.6" rx="1.2"><title>2026-11-06 · 对话 0 · 文件 0 · 0 tok</title></rect><rect x="436.3" y="84.6" width="15.4" height="19.4" rx="1.2"><title>2026-11-07 · 对话 4 · 文件 9 · 422.7k tok</title></rect><rect x="460.3" y="31.1" width="15.4" height="72.9" rx="1.2"><title>2026-11-08 · 对话 15 · 文件 34 · 1.6M tok</title></rect><rect x="484.3" y="2.0" width="15.4" height="102.0" rx="1.2"><title>2026-11-09 · 对话 21 · 文件 48 · 2.2M tok</title></rect><rect x="508.3" y="65.1" width="15.4" height="38.9" rx="1.2"><title>2026-11-10 · 对话 8 · 文件 18 · 845.5k tok</title></rect><rect x="532.3" y="74.9" width="15.4" height="29.1" rx="1.2"><title>2026-11-11 · 对话 6 · 文件 14 · 634.1k tok</title></rect><rect x="556.3" y="94.3" width="15.4" height="9.7" rx="1.2"><title>2026-11-12 · 对话 2 · 文件 5 · 211.4k tok</title></rect><rect x="580.3" y="104.0" width="15.4" height="1.6" rx="1.2"><title>2026-11-13 · 对话 0 · 文件 0 · 0 tok</title></rect><rect x="604.3" y="45.7" width="15.4" height="58.3" rx="1.2"><title>2026-11-14 · 对话 12 · 文件 27 · 1.3M tok</title></rect><rect x="628.3" y="26.3" width="15.4" height="77.7" rx="1.2"><title>2026-11-15 · 对话 16 · 文件 36 · 1.7M tok</title></rect><rect x="652.3" y="74.9" width="15.4" height="29.1" rx="1.2"><title>2026-11-16 · 对话 6 · 文件 14 · 634.1k tok</title></rect><rect x="676.3" y="2.0" width="15.4" height="102.0" rx="1.2"><title>2026-11-17 · 对话 21 · 文件 48 · 2.2M tok</title></rect><rect x="700.3" y="89.4" width="15.4" height="14.6" rx="1.2"><title>2026-11-18 · 对话 3 · 文件 7 · 317.1k tok</title></rect></svg></div>
+  <div class="axis"><span>2026-10-20</span><span>2026-11-18</span></div>
+</section>
+<section>
+  <h2>项目（按对话量）</h2>
+  <ul class="proj"><li><div class="prow"><span class="pn">BatchRenamer</span><span class="pv">62</span></div><div class="pbar"><i style="width:100.0%"></i></div><div class="pm">19 会话 · 148 文件 · 6.7M tok · 2026-10-20 → 2026-11-18</div></li><li><div class="prow"><span class="pn">order-sync</span><span class="pv">41</span></div><div class="pbar"><i style="width:66.1%"></i></div><div class="pm">14 会话 · 96 文件 · 4.5M tok · 2026-10-22 → 2026-11-17</div></li><li><div class="prow"><span class="pn">报表导出器</span><span class="pv">33</span></div><div class="pbar"><i style="width:53.2%"></i></div><div class="pm">11 会话 · 71 文件 · 3.6M tok · 2026-10-25 → 2026-11-16</div></li><li><div class="prow"><span class="pn">InvoiceParser</span><span class="pv">27</span></div><div class="pbar"><i style="width:43.5%"></i></div><div class="pm">9 会话 · 58 文件 · 2.9M tok · 2026-10-27 → 2026-11-14</div></li><li><div class="prow"><span class="pn">task-board</span><span class="pv">19</span></div><div class="pbar"><i style="width:30.6%"></i></div><div class="pm">7 会话 · 44 文件 · 2.0M tok · 2026-11-01 → 2026-11-12</div></li><li><div class="prow"><span class="pn">reader-private</span><span class="pv">14</span></div><div class="pbar"><i style="width:22.6%"></i></div><div class="pm">5 会话 · 31 文件 · 1.6M tok · 2026-10-29 → 2026-11-09</div></li><li><div class="prow"><span class="pn">CDN</span><span class="pv">9</span></div><div class="pbar"><i style="width:14.5%"></i></div><div class="pm">3 会话 · 18 文件 · 669.0k tok · 2026-11-04 → 2026-11-10</div></li><li><div class="prow"><span class="pn">some-plugin</span><span class="pv">6</span></div><div class="pbar"><i style="width:9.7%"></i></div><div class="pm">2 会话 · 12 文件 · 446.0k tok · 2026-11-06 → 2026-11-08</div></li></ul>
+</section>
+<footer>
+  <span>由 <a href="https://github.com/winrich/dev-project-archivist">
+  dev-project-archivist</a> 生成 · 数据来自本机对话转录，未上传任何内容</span>
+  <span>不含工作区路径与指令原文</span>
+</footer>
+</main>
+</body>
+</html>
