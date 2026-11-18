@@ -519,7 +519,7 @@ dev-project-archivist/
 │   │   ├── workbuddy.py            # WorkBuddy session index and parser
 │   │   ├── claude_code.py          # Claude Code JSONL parser
 │   │   └── __init__.py             # Registry and --source selection
-│   └── tests/                      # 210 tests, all runnable offline
+│   └── tests/                      # 227 tests, all runnable offline
 │       ├── test_adapters.py        # Adapter unit tests
 │       ├── test_daylog.py          # Per-day aggregation (nothing lost or double counted)
 │       ├── test_naming.py          # Name evidence chain and title cleanup
@@ -528,11 +528,13 @@ dev-project-archivist/
 │       ├── test_stats.py           # Cross-day ledger, same numbers as daylog
 │       ├── test_report.py          # HTML report structure and redaction
 │       ├── test_restore.py         # Restore semantics (throwaway git repos)
+│       ├── test_sync.py            # Push safety: never force, no remote = untouched
 │       ├── test_release.py         # Version number consistent in all three places
 │       └── test_public_content.py  # Leak guard: competitor name / home paths with a username
 ├── references/
 │   ├── automation-prompt.md        # Copy-pasteable prompt for the nightly job
 │   └── data-sources.md             # Local data source structures (troubleshooting)
+├── docs/                           # Process notes: assessment / plan / change log
 └── LICENSE                         # MIT
 ```
 
@@ -550,7 +552,7 @@ Issues and PRs are welcome. Especially useful:
 Before submitting, please run:
 
 ```bash
-python -m unittest discover -s scripts/tests   # full suite, 210 tests, offline
+python -m unittest discover -s scripts/tests   # full suite, 227 tests, offline
 python scripts/archiver.py scan --dry-run
 ```
 

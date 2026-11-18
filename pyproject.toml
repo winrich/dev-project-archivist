@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dev-project-archivist"
-version = "0.3.0"
+version = "0.4.0"
 description = "把散落在 AI 对话窗口里的软件项目，收拢成可浏览、可移交、可长期同步的本地源码档案"
 readme = "README.md"
 requires-python = ">=3.8"

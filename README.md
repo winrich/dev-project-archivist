@@ -812,7 +812,7 @@ dev-project-archivist/
 │   │   ├── workbuddy.py            # WorkBuddy 会话索引与解析
 │   │   ├── claude_code.py          # Claude Code JSONL 解析
 │   │   └── __init__.py             # 注册表与 --source 选择
-│   └── tests/                      # 210 例，全部可离线跑
+│   └── tests/                      # 227 例，全部可离线跑
 │       ├── test_adapters.py        # 适配器单元测试
 │       ├── test_daylog.py          # 按天聚合（不丢不重）
 │       ├── test_naming.py          # 命名证据链与标题清洗
@@ -821,11 +821,13 @@ dev-project-archivist/
 │       ├── test_stats.py           # 跨天账本口径（与 daylog 一致）
 │       ├── test_report.py          # HTML 报告结构与脱敏
 │       ├── test_restore.py         # 按日恢复语义（临时 git 仓库）
+│       ├── test_sync.py            # 备份推送：不 force、未配远端不碰
 │       ├── test_release.py         # 版本号三处一致
 │       └── test_public_content.py  # 公开内容防泄漏：竞品名 / 带用户名的路径
 ├── references/
 │   ├── automation-prompt.md        # 夜间定时任务的可粘贴提示词
 │   └── data-sources.md             # 本机数据源结构说明（排查用）
+├── docs/                           # 过程文档：方向再评估 / 完善计划 / 变更说明
 └── LICENSE                         # MIT
 ```
 
@@ -843,7 +845,7 @@ dev-project-archivist/
 提交前请跑一遍：
 
 ```bash
-python -m unittest discover -s scripts/tests   # 全量，210 例，离线可跑
+python -m unittest discover -s scripts/tests   # 全量，227 例，离线可跑
 python scripts/archiver.py scan --dry-run
 ```
 
