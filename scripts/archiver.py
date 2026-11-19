@@ -2061,7 +2061,8 @@ def run_scan(target: Path, dry_run=False, limit=0, only="", force=False,
         # 并记录路径（不复制源码，不改变归档边界）。
         if p.type == "空壳" and EXT is not None:
             try:
-                ext = EXT.detect_for_project(p.sessions, idx, adapters, by_name, p.workspace)
+                ext = EXT.detect_for_project(p.sessions, idx, adapters, by_name,
+                                             p.workspace, archive_root=str(target))
                 if ext:
                     p.external_dirs = ext
                     p.type = "代码项目"
@@ -5535,7 +5536,8 @@ def main():
         with Lock(target):
             for p in projects:
                 try:
-                    ext = EXT.detect_for_project(p.sessions, idx, adapters, by_name, p.workspace)
+                    ext = EXT.detect_for_project(p.sessions, idx, adapters, by_name,
+                                             p.workspace, archive_root=str(target))
                 except Exception:
                     ext = []
                 st = state.proj(p.key)

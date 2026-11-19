@@ -97,9 +97,34 @@ def test_own_workspace_excluded():
         _restore_noise()
 
 
+def test_archive_root_excluded():
+    """归档目录内的写入是归档器自身输出，不算外部成果（大本营/归档输出误判的根因）。"""
+    _allow_temp()
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            ws = str(Path(td) / "ws")
+            Path(ws).mkdir()
+            arch = Path(td) / "archive"          # 模拟归档目标目录
+            proj = arch / "2026-01-01_某项目"
+            proj.mkdir(parents=True)
+            (proj / "pyproject.toml").write_text("[project]", encoding="utf-8")
+            events = [{"kind": A.EV_WRITE, "rel": "", "external": str(proj / "a.py")}
+                      for _ in range(20)]
+            # 不传 archive_root → 检出外部工程（归档器输出被误判）
+            r0 = E.collect_external(events, ws)
+            assert r0, "前置：无排除时应检出归档目录内的工程"
+            # 传 archive_root → 全部排除
+            r1 = E.collect_external(events, ws, archive_root=str(arch))
+            assert r1 == {}, r1
+            print("  归档目录排除: 20 次归档输出写入全部不计入")
+    finally:
+        _restore_noise()
+
+
 def main():
     tests = [test_noise_filter, test_project_root_sln_over_csproj,
-             test_collect_external_merge_and_threshold, test_own_workspace_excluded]
+             test_collect_external_merge_and_threshold, test_own_workspace_excluded,
+             test_archive_root_excluded]
     for t in tests:
         print(f"[RUN] {t.__name__}")
         t()

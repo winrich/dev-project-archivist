@@ -45,6 +45,12 @@ def _norm(path: str) -> str:
     return (path or "").replace("\\", "/").rstrip("/")
 
 
+def _under(path: str, root: str) -> bool:
+    """path 是否等于 root 或位于其下（大小写不敏感，路径先经 _norm 规范化）。"""
+    p, r = _norm(path).lower(), _norm(root).lower()
+    return bool(r) and (p == r or p.startswith(r + "/"))
+
+
 def is_noise(path: str) -> bool:
     """临时/缓存/日志路径返回 True（不纳入成果）。"""
     low = _norm(path).lower() + "/"
@@ -102,10 +108,12 @@ def find_project_root(abs_path: str) -> str:
     return ""
 
 
-def collect_external(events, workspace: str) -> dict:
+def collect_external(events, workspace: str, archive_root: str = "") -> dict:
     """消费中立事件流，返回 {root: {writes, files:set, first, last}}。
 
     只统计工作区外写入（EV_WRITE 且 rel 为空、external 非空）。
+    archive_root 为归档目标目录：归档器自己写出的归档文件不算「外部成果」，
+    否则归档任务会话会把归档输出误判成外部工程（实测一次归档 51 条写入全在此）。
     """
     import archiver as A
     ws = _norm(workspace).lower()
@@ -122,6 +130,9 @@ def collect_external(events, workspace: str) -> dict:
             continue
         raw = _norm(ev["external"])
         if not raw or is_noise(raw):
+            continue
+        # 归档器自己的输出目录不算外部成果（归档任务会话的高频误判源）
+        if archive_root and _under(raw, archive_root):
             continue
         root = find_project_root(raw)
         if not root or is_noise(root):
@@ -141,12 +152,13 @@ def collect_external(events, workspace: str) -> dict:
 
 
 def detect_for_project(sessions: list, idx, adapters: list, by_name: dict,
-                       workspace: str) -> list:
+                       workspace: str, archive_root: str = "") -> list:
     """扫描一个项目的所有会话转录，返回外部成果清单（写入次数降序）。
 
     sessions: [{sid, source, ...}]
     idx: MultiIndex，提供 transcript(sid)
     adapters/by_name: 平台适配器，用于 iter_events
+    archive_root: 归档目标目录，其内的写入是归档器输出，不计入成果。
     """
     merged = defaultdict(lambda: {"writes": 0, "files": set(), "first": None, "last": None})
     for s in sessions:
@@ -158,7 +170,7 @@ def detect_for_project(sessions: list, idx, adapters: list, by_name: dict,
             continue
         try:
             events = ad.iter_events(tp, workspace)
-            part = collect_external(events, workspace)
+            part = collect_external(events, workspace, archive_root=archive_root)
         except Exception:
             continue
         for root, rec in part.items():

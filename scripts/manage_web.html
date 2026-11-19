@@ -343,7 +343,7 @@
   </div>
   <div class="sec" id="extSec" style="display:none">
     <h3>外部成果目录</h3>
-    <p class="muted">源码不在归档工作区内，以下为对话中实际写入的工程目录（未复制进归档）。</p>
+    <p class="muted" id="extHint"></p>
     <div id="dExt"></div>
   </div>
   <div class="sec">
@@ -425,6 +425,14 @@ function switchView(view) {
 }
 function todayStr() {
   const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+/* 把外部成果目录的 first/last 归一化为 YYYY-MM-DD：兼容毫秒时间戳(number)与日期字符串 */
+function fmtDay(v) {
+  if (v == null || v === '') return '';
+  const d = (typeof v === 'number') ? new Date(v)
+          : new Date(String(v).slice(0,10) + 'T00:00:00');
+  if (isNaN(d.getTime())) return String(v).slice(0,10);
   return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
 }
 
@@ -587,9 +595,12 @@ async function detail(key) {
     : '（无会话记录）';
   const exts = d.external_dirs || [];
   $('extSec').style.display = exts.length ? '' : 'none';
+  $('extHint').textContent = d.upgraded_from_shell
+    ? '源码不在归档工作区内，以下为对话中实际写入的工程目录（未复制进归档）。'
+    : '本项目源码已归档；以下为对话中同时写过的归档区外目录（这些目录未复制进归档）。';
   $('dExt').innerHTML = exts.map(x => {
     const span = (x.first || x.last)
-      ? ` · ${esc((x.first||'').slice(0,10))} → ${esc((x.last||'').slice(0,10))}` : '';
+      ? ` · ${esc(fmtDay(x.first))} → ${esc(fmtDay(x.last))}` : '';
     return `<div class="ext-item"><code>${esc(x.root)}</code>
       <span class="muted">${x.writes} 次写入 · ${x.files} 文件${span}</span></div>`;
   }).join('');
