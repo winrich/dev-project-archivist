@@ -87,6 +87,8 @@ DEFAULT_TARGET = Path(os.environ.get("ARCHIVER_TARGET")
 STATE_FILE = "state.json"
 INDEX_MD = "INDEX.md"
 INDEX_JSON = "index.json"
+REPORT_INDEX = "report_index.json"      # 报告档案索引，由 cmd_report 登记
+REPORT_SUBDIR = "report"                # 归档 HTML 目录
 CHANGELOG = "CHANGELOG.md"
 EVIDENCE_DIR = "_evidence"
 SUMMARY_FILE = "_summary.json"
@@ -3611,6 +3613,105 @@ def build_report_html(d: dict) -> str:
 """
 
 
+# ---------------------------------------------------------------- 报告档案索引
+# 索引是「每天生成的报告」的清单：cmd_report 落盘 HTML 后登记一条。
+# 键 = 文件名（含 from_to 区间），同区间重复生成则覆盖条目（幂等）。
+
+REPORT_INDEX_VERSION = 1
+
+
+def report_index_path(target: Path) -> Path:
+    return Path(target) / REPORT_INDEX
+
+
+def load_report_index(target: Path) -> dict:
+    """读索引；缺失或损坏返回空结构，不抛异常（管理台要能降级）。"""
+    try:
+        d = json.loads(read_text(report_index_path(target)) or "{}")
+        if not isinstance(d, dict) or not isinstance(d.get("reports"), list):
+            raise ValueError("bad shape")
+    except Exception:
+        d = {}
+    d.setdefault("version", REPORT_INDEX_VERSION)
+    d.setdefault("reports", [])
+    return d
+
+
+def save_report_index(target: Path, idx: dict):
+    """原子写索引。写操作由调用方持 Lock(target)。"""
+    idx["version"] = REPORT_INDEX_VERSION
+    idx["updated_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    atomic_write(report_index_path(target),
+                 json.dumps(idx, ensure_ascii=False, indent=2) + "\n")
+
+
+def index_report(target: Path, d: dict, path: Path) -> bool:
+    """把刚生成的报告登记进索引。返回 True 表示新增，False 表示覆盖同区间条目。
+
+    调用方应持有 Lock(target)。索引只存元信息（区间/摘要/摘要指纹），
+    HTML 正文仍在 report/ 下独立文件里——索引坏了不会毁掉报告。
+    """
+    idx = load_report_index(target)
+    name = path.name
+    t = d.get("totals", {})
+    entry = {
+        "name": name,
+        "from": d.get("from", ""),
+        "to": d.get("to", ""),
+        "days": d.get("days", 0),
+        "generated_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+        "prompts": t.get("prompts", 0),
+        "sessions": t.get("sessions", 0),
+        "projects": t.get("projects", 0),
+        "files": t.get("files", 0),
+        "tokens": t.get("tok_in", 0) + t.get("tok_out", 0),
+        "sha256": sha1_file(path),
+        "bytes": path.stat().st_size if path.exists() else 0,
+    }
+    reports = [r for r in idx["reports"] if r.get("name") != name]
+    is_new = len(reports) == len(idx["reports"])
+    reports.append(entry)
+    # 按 to（报告截止日）倒序，最新在区间最前的排上方
+    reports.sort(key=lambda r: (r.get("to", ""), r.get("generated_at", "")), reverse=True)
+    idx["reports"] = reports
+    save_report_index(target, idx)
+    return is_new
+
+
+def backfill_report_index(target: Path) -> int:
+    """把 report/ 下已有的 HTML 补登记进索引（一次性迁移存量报告）。
+
+    仅登记文件名符合 report-日期_日期.html 的文件，跳过已登记的；
+    摘要字段留空（存量 HTML 的 totals 无法无损反推），但可按日期检索与打开。
+    返回新登记条数。调用方应持有 Lock(target)。
+    """
+    idx = load_report_index(target)
+    have = {r.get("name") for r in idx["reports"]}
+    added = 0
+    report_dir = Path(target) / REPORT_SUBDIR
+    try:
+        htmls = sorted(report_dir.glob("report-*.html"))
+    except Exception:
+        htmls = []
+    for p in htmls:
+        m = re.fullmatch(r"report-(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})\.html", p.name)
+        if not m or p.name in have:
+            continue
+        st = p.stat()
+        idx["reports"].append({
+            "name": p.name, "from": m.group(1), "to": m.group(2),
+            "days": 0,
+            "generated_at": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%dT%H:%M:%S"),
+            "prompts": 0, "sessions": 0, "projects": 0, "files": 0, "tokens": 0,
+            "sha256": sha1_file(p), "bytes": st.st_size,
+        })
+        added += 1
+    if added:
+        idx["reports"].sort(key=lambda r: (r.get("to", ""), r.get("generated_at", "")), reverse=True)
+        save_report_index(target, idx)
+    return added
+
+
 def cmd_report(target: Path, sources=None, days: int = 30, end: str = "",
                out: str = "", open_it: bool = False) -> int:
     """写一份单文件 HTML 账本（可截图、可直接发人）。只写这一个文件。"""
@@ -3620,9 +3721,18 @@ def cmd_report(target: Path, sources=None, days: int = 30, end: str = "",
         return 1
 
     text = build_report_html(d)
-    out_dir = Path(out) if out else (target / "report")
+    out_dir = Path(out) if out else (target / REPORT_SUBDIR)
     path = out_dir / f"report-{d['from']}_{d['to']}.html"
     atomic_write(path, text)
+
+    # 登记到档案索引（与归档器其它写操作共用互斥锁）
+    try:
+        with Lock(target):
+            is_new = index_report(target, d, path)
+        print(f"  档案索引：{'新增' if is_new else '更新'} {path.name}")
+    except Exception as e:
+        # 索引失败不影响报告本身已落盘
+        print(f"  警告：档案索引登记失败（报告已写入）：{e}")
 
     print(f"已写入 {path}")
     total_tok = d["totals"]["tok_in"] + d["totals"]["tok_out"]
@@ -5265,7 +5375,7 @@ def main():
     ap.add_argument("cmd",
                     choices=["scan", "render", "run", "pending", "status",
                              "git-clean", "daylog", "log", "find", "stats", "report",
-                             "restore", "sync", "manage"],
+                             "report-backfill", "restore", "sync", "manage"],
                     help="scan=采集/render=渲染/run=全流程/pending=待归纳/status=状态/"
                          "git-clean=重建归档器创建的 git 仓库以清除历史大对象/"
                          "daylog=按天汇总开发活动（预览，零写入）/"
@@ -5273,6 +5383,7 @@ def main():
                          "find=跨项目检索（名字/文件名/指令原文，只读）/"
                          "stats=跨天账本：最近 N 天的对话/文件/token（只读）/"
                          "report=写成单文件 HTML 账本（可截图分享）/"
+                         "report-backfill=把已有 HTML 报告补登记进档案索引/"
                          "restore=按日恢复归档快照到副本目录（默认只预览）/"
                          "sync=归档仓库同步：看哪些没推，或 --push 推到各自远端/"
                          "manage=本地浏览器管理台（--port 可改端口，仅监听 127.0.0.1）")
@@ -5346,9 +5457,14 @@ def main():
         # 只读命令：不需要目标目录，也不加锁
         return cmd_stats(sources, days=a.days or 7, end=a.date, as_json=a.json)
     if a.cmd == "report":
-        # 只写一个 html 文件，不碰归档正文，因此不加锁
+        # 写一个 html 文件 + 登记索引（索引写入内部持锁），不碰归档正文
         return cmd_report(target, sources=sources, days=a.days or 30,
                           end=a.date, out=a.out, open_it=a.open_it)
+    if a.cmd == "report-backfill":
+        with Lock(target):
+            n = backfill_report_index(target)
+        print(f"补登 {n} 份存量报告到档案索引")
+        return 0
     if a.cmd == "find":
         # 只读命令：不加锁、不写任何文件
         return cmd_find(target, a.query, as_json=a.json,

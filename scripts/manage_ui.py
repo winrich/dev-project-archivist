@@ -13,6 +13,7 @@ import hmac
 import http.server
 import json
 import os
+import re
 import secrets
 import socketserver
 import sys
@@ -35,6 +36,14 @@ SESSION_TTL = 8 * 3600
 BIND_HOST = "127.0.0.1"
 
 HTML_FILE = Path(__file__).with_name("manage_web.html")
+
+# 归档报告文件名白名单：report-YYYY-MM-DD_YYYY-MM-DD.html
+_REPORT_NAME_RE = re.compile(r"^report-\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2}\.html$")
+
+
+def report_name_ok(name: str) -> bool:
+    """严格校验归档报告文件名，杜绝 ../ 等路径穿越。"""
+    return bool(name) and bool(_REPORT_NAME_RE.fullmatch(name))
 
 
 def auth_path(target: Path) -> Path:
@@ -233,11 +242,30 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     self.err(f"操作失败：{e}", 500)
 
     # ------------------------------------------------------------ 路由
+    def serve_report_html(self, filename: str):
+        """认证后 serve 归档 HTML。文件名严格白名单，杜绝路径穿越。"""
+        if not report_name_ok(filename):
+            return self.err("非法报告文件名", 400)
+        p = self.target / "report" / filename
+        if not p.is_file():
+            return self.err("报告不存在", 404)
+        try:
+            data = p.read_bytes()
+        except Exception as e:
+            return self.err(str(e), 500)
+        self._send(200, data, "text/html; charset=utf-8",
+                   {"Cache-Control": "no-store"})
+
     def do_GET(self):
         path = urlparse(self.path).path
         if path in ("/", "/index.html"):
             self.serve_html()
             return
+        if path.startswith("/report/"):
+            if not self.authenticated():
+                return self.err("未登录", 401)
+            name = urlparse(self.path).path[len("/report/"):]
+            return self.serve_report_html(name)
         if path == "/api/session":
             if self.authenticated():
                 self.json_out({"ok": True, "csrf": self.sessions.csrf(self.cookie())})
@@ -284,6 +312,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if not d.get("ok"):
                     return self.err(d.get("msg") or "报告生成失败", 400)
                 self.json_out({"ok": True, "data": d})
+            except Exception as e:
+                self.err(str(e), 500)
+            return
+        if path in ("/api/reports", "/api/report-archive"):
+            if not self.authenticated():
+                return self.err("未登录", 401)
+            q = parse_qs(urlparse(self.path).query)
+            try:
+                s = self.store()
+                if path == "/api/reports":
+                    offset = max(0, int((q.get("offset") or ["0"])[0]))
+                    limit = max(0, min(int((q.get("limit") or ["0"])[0]), 500))
+                    data = s.report_list(offset=offset, limit=limit)
+                else:
+                    date_str = (q.get("date") or [""])[0]
+                    data = s.report_archive(date_str)
+                self.json_out({"ok": True, "data": data})
             except Exception as e:
                 self.err(str(e), 500)
             return

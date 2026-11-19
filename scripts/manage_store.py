@@ -31,6 +31,8 @@ MANUAL_FIELDS = ("title", "purpose", "type", "pinned", "watching", "note", "skip
 BOOL_FIELDS = ("pinned", "watching", "skip")
 TYPE_CHOICES = ("代码项目", "文档任务", "混合产物")
 BACKUP_DIR = "_trash/_manage_backups"
+REPORT_INDEX = "report_index.json"      # 报告档案索引（archiver.cmd_report 负责登记）
+REPORT_SUBDIR = "report"                # 归档 HTML 存放目录
 
 
 def norm_key(key: str) -> str:
@@ -260,6 +262,47 @@ class ManageStore:
                  "score": p["activity"]["score"], "level": p["activity"]["level"],
                  "sessions": p["sessions"], "last_dev": p["last_dev"],
                  "spark": p["activity"]["spark"]} for p in items[:limit]]
+
+    # ------------------------------------------------------------ 报告档案
+
+    def report_list(self, offset: int = 0, limit: int = 0) -> dict:
+        """档案列表：索引里按 to/generated_at 倒序（索引写入时已排好）。
+
+        limit=0 表示不截断。返回 {total, items}，供管理台分页。
+        """
+        idx = A.load_report_index(self.target)
+        reports = idx.get("reports", [])
+        total = len(reports)
+        if limit and limit > 0:
+            items = reports[offset:offset + limit]
+        else:
+            items = reports[offset:] if offset else reports
+        return {"total": total, "items": items, "updated_at": idx.get("updated_at", "")}
+
+    def report_archive(self, date_str: str) -> list:
+        """按日期检索覆盖该日的报告：from <= date <= to。
+
+        date_str 必须是 YYYY-MM-DD，否则返回空列表。
+        """
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_str or ""):
+            return []
+        idx = A.load_report_index(self.target)
+        out = []
+        for r in idx.get("reports", []):
+            f, t = r.get("from", ""), r.get("to", "")
+            if f and t and f <= date_str <= t:
+                item = dict(r)
+                # 该日在这份报告区间内是第几天（便于前端展示"第 X/N 天"）
+                try:
+                    from datetime import date as _date
+                    d0 = _date.fromisoformat(f)
+                    d1 = _date.fromisoformat(date_str)
+                    item["day_index"] = (d1 - d0).days + 1
+                except Exception:
+                    item["day_index"] = 0
+                out.append(item)
+        out.sort(key=lambda r: (r.get("to", ""), r.get("generated_at", "")), reverse=True)
+        return out
 
     def _summary_title(self, st: dict) -> str:
         adir = self.target / (st.get("dir") or "")

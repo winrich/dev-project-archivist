@@ -105,6 +105,14 @@
   .bigspark { display: flex; align-items: flex-end; gap: 3px; height: 70px; padding-top: 6px; }
   .bigspark i { flex: 1; background: var(--accent); border-radius: 2px 2px 0 0; min-height: 2px; }
 
+  /* 报告档案 */
+  .arc-item { display: flex; align-items: center; gap: 12px; padding: 9px 10px;
+              border-bottom: 1px solid var(--line); font-size: 13px; }
+  .arc-item:last-child { border-bottom: 0; }
+  .arc-item .range { font-weight: 600; min-width: 190px; }
+  .arc-item .meta { color: var(--muted); font-size: 12px; flex: 1; }
+  .arc-empty { color: var(--muted); font-size: 12px; padding: 10px 0; }
+
   /* 详情抽屉 */
   #mask { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 10; }
   #drawer { position: fixed; top: 0; right: 0; width: min(640px, 94vw); height: 100vh;
@@ -228,11 +236,33 @@
       <!-- 按日期报告 -->
       <section class="view hidden" id="view-report">
         <h2>按日期报告</h2>
-        <p class="sub">复用命令行 <code>report</code> 的数据口径，统计区间来自原始对话数据源（与归档视角略有差异）。</p>
-        <div class="toolbar">
-          <label>最近 <input type="number" id="repDays" value="30" min="1" max="366" style="width:80px"> 天</label>
-          <label>截止日 <input type="date" id="repEnd" style="width:150px"></label>
-          <button class="btn sm" id="repBtn">生成报告</button>
+        <p class="sub">历史报告按日归档入库，可按日期检索并查看原报告；下方也可现场生成一份新报告。</p>
+
+        <div class="panel">
+          <h3>报告档案 · 按日期检索</h3>
+          <div class="toolbar" style="margin-bottom:10px">
+            <label>日期 <input type="date" id="arcDate" style="width:150px"></label>
+            <button class="btn sm" id="arcSearchBtn">检索该日</button>
+            <button class="btn sm ghost" id="arcAllBtn">列出全部</button>
+            <span class="muted" id="arcCount"></span>
+          </div>
+          <div id="arcList"></div>
+          <div id="arcViewer" class="hidden" style="margin-top:14px">
+            <div class="toolbar" style="margin-bottom:6px">
+              <span class="muted" id="arcViewerTitle"></span>
+              <button class="btn sm ghost" id="arcCloseBtn">关闭预览</button>
+            </div>
+            <iframe id="arcFrame" title="报告详情" style="width:100%;height:620px;border:1px solid var(--line);border-radius:8px;background:#fff"></iframe>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3>现场生成（实时统计，不入库）</h3>
+          <div class="toolbar" style="margin-bottom:10px">
+            <label>最近 <input type="number" id="repDays" value="30" min="1" max="366" style="width:80px"> 天</label>
+            <label>截止日 <input type="date" id="repEnd" style="width:150px"></label>
+            <button class="btn sm" id="repBtn">生成报告</button>
+          </div>
         </div>
         <div id="repTotals" class="cards"></div>
         <div class="panel">
@@ -331,6 +361,7 @@ let curKey = '';
 let curView = 'projects';
 let page = 1;
 let pageSize = 20;
+let arcLoaded = false;   // 档案列表是否已加载过
 
 const $ = id => document.getElementById(id);
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c =>
@@ -377,7 +408,11 @@ function switchView(view) {
   document.querySelectorAll('.view').forEach(v => v.classList.toggle('hidden', v.id !== 'view-' + view));
   if (view === 'overview') loadOverview();
   if (view === 'ranking') loadRanking();
-  if (view === 'report' && !$('repEnd').value) $('repEnd').value = todayStr();
+  if (view === 'report') {
+    if (!$('repEnd').value) $('repEnd').value = todayStr();
+    if (!$('arcDate').value) $('arcDate').value = todayStr();
+    if (!arcLoaded) loadAllReports();
+  }
 }
 function todayStr() {
   const d = new Date();
@@ -626,7 +661,52 @@ async function loadRanking() {
     </tr>`).join('') || '<tr><td colspan="6" class="muted">无关注中项目</td></tr>';
 }
 
-/* ---------- 按日期报告 ---------- */
+/* ---------- 报告档案 ---------- */
+$('arcSearchBtn').onclick = () => loadArchiveByDate($('arcDate').value);
+$('arcAllBtn').onclick = loadAllReports;
+$('arcCloseBtn').onclick = () => $('arcViewer').classList.add('hidden');
+$('arcDate').value = '';
+
+function renderArcList(items, label) {
+  arcLoaded = true;
+  $('arcCount').textContent = label;
+  if (!items || !items.length) {
+    $('arcList').innerHTML = '<div class="arc-empty">该日期没有覆盖的报告</div>';
+    return;
+  }
+  $('arcList').innerHTML = items.map(r => {
+    const meta = [r.generated_at || '', r.days ? r.days + ' 天' : '',
+      r.prompts ? r.prompts + ' 对话' : '', r.tokens ? fmtNum(r.tokens) + ' tok' : '',
+      r.day_index ? '第 ' + r.day_index + ' 天' : ''].filter(Boolean).join(' · ');
+    return `<div class="arc-item">
+      <span class="range">${esc(r.from)} → ${esc(r.to)}</span>
+      <span class="meta">${esc(meta)}</span>
+      <button class="btn sm ghost" onclick="openReport('${esc(r.name)}')">查看</button>
+    </div>`;
+  }).join('');
+}
+
+async function loadAllReports() {
+  const r = await api('/api/reports');
+  if (!r.ok) return toast(r.error || '档案读取失败');
+  const d = r.data;
+  renderArcList(d.items, `共 ${d.total} 份归档报告`);
+}
+
+async function loadArchiveByDate(date) {
+  if (!date) return toast('请选择日期');
+  const r = await api('/api/report-archive?date=' + encodeURIComponent(date));
+  if (!r.ok) return toast(r.error || '检索失败');
+  renderArcList(r.data, `${date}：命中 ${r.data.length} 份`);
+}
+
+function openReport(name) {
+  $('arcFrame').src = '/report/' + encodeURIComponent(name);
+  $('arcViewerTitle').textContent = '报告详情：' + name;
+  $('arcViewer').classList.remove('hidden');
+}
+
+/* ---------- 按日期报告（现场生成） ---------- */
 $('repBtn').onclick = loadReport;
 async function loadReport() {
   const days = $('repDays').value || 30, end = $('repEnd').value;
