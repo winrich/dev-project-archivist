@@ -184,6 +184,8 @@ class ManageStore:
                 "name": name,
                 "workspace": st.get("workspace") or "",
                 "type": st.get("type") or "",
+                "external_dirs": st.get("external_dirs") or [],
+                "upgraded_from_shell": bool(st.get("upgraded_from_shell")),
                 "language": st.get("language") or "",
                 "first_dev": A.day(st.get("first_ts")),
                 "last_dev": A.day(st.get("last_ts")),

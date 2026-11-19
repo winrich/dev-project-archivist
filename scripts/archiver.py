@@ -55,6 +55,10 @@ from adapters.base import (EV_ASSISTANT, EV_PROMPT,  # noqa: E402
                            EV_TITLE, EV_TOOL, EV_TOOL_RESULT, EV_TS, EV_USAGE,
                            EV_WRITE, cmd_class, git_identity, git_work_tree,
                            tool_type)
+try:
+    import external_store as EXT  # 工作区外成果探测（空壳升级判定用）
+except ImportError:
+    EXT = None  # noqa: E402
 
 # ---------------------------------------------------------------- 版本
 # 与 pyproject.toml 的 version、CHANGELOG.md 最新条目标题必须一致。
@@ -991,6 +995,7 @@ class Project:
         self.name = ""
         self.name_src = ""      # 名字取自哪个证据（git remote / 工程清单 / 目录名 / 会话标题）
         self.entries = []       # 工程入口文件，供 --explain 展示判定依据
+        self.external_dirs = [] # 工作区外的成果目录（空壳升级判定用）
         self.key = ""
 
     def compute(self, min_code: int):
@@ -2050,6 +2055,21 @@ def run_scan(target: Path, dry_run=False, limit=0, only="", force=False,
             p.name = safe_name(ovp["title"])
         if ovp.get("type") in ("代码项目", "文档任务", "混合产物"):
             p.type = ovp["type"]
+
+        # 空壳升级判定：工作区无源码，但会话里大量写入工作区外的工程目录时，
+        # 它不是空壳。从转录提取外部成果，命中工程根就把 type 升级为代码项目，
+        # 并记录路径（不复制源码，不改变归档边界）。
+        if p.type == "空壳" and EXT is not None:
+            try:
+                ext = EXT.detect_for_project(p.sessions, idx, adapters, by_name, p.workspace)
+                if ext:
+                    p.external_dirs = ext
+                    p.type = "代码项目"
+                    log(f"  · {p.name}：工作区无源码，但检出 {len(ext)} 处外部工程，"
+                        f"升级为代码项目（不复制源码）")
+            except Exception as e:
+                log(f"  · {p.name}：外部成果探测失败（不影响归档）：{e}")
+
         # 只对代码项目与混合产物建归档（文档任务仅在索引中留一行）
         if p.type not in ("代码项目", "混合产物"):
             st = state.proj(p.key)
@@ -2062,7 +2082,8 @@ def run_scan(target: Path, dry_run=False, limit=0, only="", force=False,
                        "first_ts": p.first_ts, "last_ts": p.last_ts,
                        "sessions": len(p.sessions), "files": p.cls["total_files"],
                        "bytes": p.cls["total_bytes"], "archived": False,
-                       "status": "active" if Path(p.workspace).exists() else "missing"})
+                       "status": "active" if Path(p.workspace).exists() else "missing",
+                       "external_dirs": [], "upgraded_from_shell": False})
             skipped += 1
             continue
 
@@ -2133,6 +2154,8 @@ def run_scan(target: Path, dry_run=False, limit=0, only="", force=False,
             "workspace": p.workspace,
             "kind": p.kind,
             "type": p.type,
+            "external_dirs": p.external_dirs,
+            "upgraded_from_shell": bool(p.external_dirs),
             "language": p.cls.get("language", "—"),
             "langs": p.cls.get("langs", [])[:6],
             "tech": p.tech,
@@ -2193,6 +2216,8 @@ def run_scan(target: Path, dry_run=False, limit=0, only="", force=False,
             "last_archived": iso(now_ts()),
             "status": "active",
             "evidence_hash": sha1_text(ev),
+            "external_dirs": p.external_dirs,
+            "upgraded_from_shell": bool(p.external_dirs),
         })
         touched.append(p.name)
         (added if is_new else updated).append(p.name)
@@ -5391,7 +5416,7 @@ def main():
                     choices=["scan", "render", "run", "pending", "status",
                              "git-clean", "daylog", "log", "find", "stats", "report",
                              "report-backfill", "report-migrate", "sessions-sync",
-                             "restore", "sync", "manage"],
+                             "external-refresh", "restore", "sync", "manage"],
                     help="scan=采集/render=渲染/run=全流程/pending=待归纳/status=状态/"
                          "git-clean=重建归档器创建的 git 仓库以清除历史大对象/"
                          "daylog=按天汇总开发活动（预览，零写入）/"
@@ -5402,6 +5427,7 @@ def main():
                          "report-backfill=把已有 HTML 报告补登记进档案索引/"
                          "report-migrate=把 JSON 索引迁到 SQLite 并抽取会话明细/"
                          "sessions-sync=从各平台转录刷新 sessions 表/"
+                         "external-refresh=重扫工作区外工程成果，升级空壳并刷新路径（不复制源码）/"
                          "restore=按日恢复归档快照到副本目录（默认只预览）/"
                          "sync=归档仓库同步：看哪些没推，或 --push 推到各自远端/"
                          "manage=本地浏览器管理台（--port 可改端口，仅监听 127.0.0.1）")
@@ -5495,6 +5521,49 @@ def main():
                 R.init_schema(target)
                 n = R.ReportDB(target).replace_sessions(build_index(get_adapters()))
             print(f"会话明细已刷新：{n} 条")
+        return 0
+    if a.cmd == "external-refresh":
+        if EXT is None:
+            print("错误：external_store 模块不可用")
+            return 1
+        adapters = get_adapters()
+        by_name = {x.name: x for x in adapters}
+        idx = build_index(adapters)
+        projects = collect_projects(idx, DEFAULTS["min_code_files"])
+        state = State(target)
+        upgraded, refreshed = [], []
+        with Lock(target):
+            for p in projects:
+                try:
+                    ext = EXT.detect_for_project(p.sessions, idx, adapters, by_name, p.workspace)
+                except Exception:
+                    ext = []
+                st = state.proj(p.key)
+                was_shell = st.get("type") == "空壳"
+                if ext and (was_shell or st.get("upgraded_from_shell")):
+                    st["type"] = "代码项目"
+                    st["upgraded_from_shell"] = True
+                    if was_shell:
+                        upgraded.append(p.name)
+                    else:
+                        refreshed.append(p.name)
+                elif ext and st.get("external_dirs") != ext:
+                    refreshed.append(p.name)
+                if ext:
+                    st["external_dirs"] = ext
+                elif st.get("upgraded_from_shell") and not ext:
+                    # 曾升级但如今外部成果已消失：退回空壳标记
+                    st["type"] = "空壳"
+                    st["upgraded_from_shell"] = False
+                    st["external_dirs"] = []
+                    refreshed.append(p.name)
+            state.save()
+        print(f"外部成果刷新：升级 {len(upgraded)} 个、更新 {len(refreshed)} 个")
+        for n in upgraded:
+            print(f"  ↑ {n}：空壳 → 代码项目（外链）")
+        for n in refreshed:
+            print(f"  ~ {n}：external_dirs 已更新")
+        print(f"  状态文件：{target / STATE_FILE}")
         return 0
     if a.cmd == "find":
         # 只读命令：不加锁、不写任何文件
