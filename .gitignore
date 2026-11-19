@@ -17,3 +17,6 @@ desktop.ini
 .vscode/
 .idea/
 *.swp
+
+# 管理台口令哈希（绝不入库）
+manage.auth.json

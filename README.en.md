@@ -513,6 +513,33 @@ Regardless of platform, every project has `_meta/conversations.md` — all user 
 
 ---
 
+## 🛠️ Management console: maintain the watched-project list
+
+If you would rather not edit `overrides.json` by hand, start a browser console that listens on **localhost only**:
+
+```bash
+python scripts/archiver.py manage --target "<archive dir>" --port 8765
+```
+
+- `--port` changes the port; `--port 0` asks the OS for a free one (the terminal prints the actual URL).
+- On first launch a random password is generated and printed **once**; set `ARCHIVER_MANAGE_PASSWORD` beforehand to use your own. The password is stored as a PBKDF2 hash in `manage.auth.json` — never in plaintext.
+- The server binds only `127.0.0.1`. Cookies are HttpOnly + SameSite=Strict, writes require a CSRF token, and five failed logins lock the client for 60 seconds.
+
+| Action | Behaviour | Safety |
+|---|---|---|
+| **Rename** | Changes the display name only (`title` in `overrides.json`); **the directory name is untouched** | Manual names survive later `render` runs |
+| **Rename directory** | Separate action; changes the directory only, display name unchanged | Rejects illegal characters and collisions, auto-backup, rollback on failure |
+| **Unwatch** | Hides the project from the default list and `find`; **source and ledger stay intact** | Switch to "All" to see and restore it |
+| **Pin** | Moves the project to the top of the index and console | Stable sort; history ledger unaffected |
+| **Details** | Aggregates purpose, tech, sessions, files, original-chat links and a manual note | Read-only |
+| **Delete** | Stops archiving (`skip=true`) and moves the directory into `_trash/` | Soft delete, recoverable by hand |
+
+The console shares the same file lock as scheduled runs, and every change is recorded in `CHANGELOG.md`.
+
+> ⚠️ Renaming a directory changes the archive path and may break old links. To fix a name, use **Rename** instead.
+
+---
+
 ## 📚 Command reference
 
 The seven commands you actually use, with their output, are in "🧠 Understand it in 30 seconds" above; this is the
@@ -539,6 +566,7 @@ full flag list.
 | `find KEYWORD` | **Cross-project search**: names / file names / prompt text. All words must match. Read-only |
 | `find KEYWORD --open` | Open the original conversation of the top hit |
 | `find KEYWORD --json` | Machine-readable output (score + snippets) |
+| `manage --port 8765` | Start the local browser console; `--port 0` picks a free port, binds 127.0.0.1 only |
 | `stats --days 7` | **Cross-day ledger**: prompts / projects / files / tokens for the last N days, plus a daily bar (read-only; `--date` sets the end date, `--json` for scripts) |
 | `report --days 30` | **Write a single-file HTML ledger**: heatmap + bar chart + project cards. No paths, no prompt text — safe to share (`--out` dir, `--open` to launch) |
 | `restore` | List **which days you can go back to** (days on which the archive repos have commits) |

@@ -309,6 +309,11 @@ class Server(socketserver.ThreadingTCPServer):
 
 
 def main():
+    # 后台/管道启动时 stdout 默认块缓冲，地址和首次口令必须立刻可见
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except Exception:
+        pass
     ap = argparse.ArgumentParser(description="对话项目归档器 · 本地管理台")
     ap.add_argument("--target", default=str(A.DEFAULT_TARGET), help="归档输出目录")
     ap.add_argument("--port", type=int, default=8765,

@@ -267,9 +267,11 @@ class ManageStore:
         raw = (new_dirname or "").strip()
         if not raw or raw in (".", ".."):
             raise ManageError("目录名不能为空或无效")
-        cand = A.safe_name(raw, maxlen=60)
-        if cand != raw:
+        if re.search(r'[\\/:*?"<>|\r\n\t]', raw):
             raise ManageError("目录名含非法字符（\\ / : * ? \" < > |）")
+        cand = raw[:60].strip(" .")
+        if not cand:
+            raise ManageError("目录名不能只有空格或点")
         old_dir = st.get("dir") or ""
         old_adir = self.target / old_dir
         if not old_adir.exists():
