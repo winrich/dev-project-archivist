@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import archiver as A
+import report_store as R
 
 # 活跃度算法参数（集中在此，便于调权与单测）
 ACT_RECENCY_HALFLIFE = 30      # 近期性半衰期（天）：30 天前得分减半
@@ -265,44 +266,61 @@ class ManageStore:
 
     # ------------------------------------------------------------ 报告档案
 
+    def _db(self) -> R.ReportDB:
+        """SQLite 主存储；库不存在时按需初始化（兼容尚未迁移的归档）。"""
+        try:
+            R.init_schema(self.target)
+        except Exception:
+            pass
+        return R.ReportDB(self.target)
+
     def report_list(self, offset: int = 0, limit: int = 0) -> dict:
-        """档案列表：索引里按 to/generated_at 倒序（索引写入时已排好）。
+        """档案列表：SQLite 主存储，按 date_to/generated_at 倒序。
 
         limit=0 表示不截断。返回 {total, items}，供管理台分页。
         """
-        idx = A.load_report_index(self.target)
-        reports = idx.get("reports", [])
-        total = len(reports)
-        if limit and limit > 0:
-            items = reports[offset:offset + limit]
-        else:
-            items = reports[offset:] if offset else reports
-        return {"total": total, "items": items, "updated_at": idx.get("updated_at", "")}
+        try:
+            return self._db().list_reports(offset=offset, limit=limit)
+        except Exception:
+            # 回退：DB 不可用时读 JSON 镜像（迁移前/损坏场景）
+            idx = A.load_report_index(self.target)
+            reports = idx.get("reports", [])
+            items = reports[offset:offset + limit] if limit and limit > 0 else reports[offset:]
+            return {"total": len(reports), "items": items,
+                    "updated_at": idx.get("updated_at", "")}
 
     def report_archive(self, date_str: str) -> list:
         """按日期检索覆盖该日的报告：from <= date <= to。
 
-        date_str 必须是 YYYY-MM-DD，否则返回空列表。
+        date_str 必须是 YYYY-MM-DD，否则返回空列表。SQLite 主存储，JSON 回退。
         """
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_str or ""):
             return []
-        idx = A.load_report_index(self.target)
-        out = []
-        for r in idx.get("reports", []):
-            f, t = r.get("from", ""), r.get("to", "")
-            if f and t and f <= date_str <= t:
-                item = dict(r)
-                # 该日在这份报告区间内是第几天（便于前端展示"第 X/N 天"）
-                try:
-                    from datetime import date as _date
-                    d0 = _date.fromisoformat(f)
-                    d1 = _date.fromisoformat(date_str)
-                    item["day_index"] = (d1 - d0).days + 1
-                except Exception:
-                    item["day_index"] = 0
-                out.append(item)
-        out.sort(key=lambda r: (r.get("to", ""), r.get("generated_at", "")), reverse=True)
-        return out
+        try:
+            return self._db().archive_by_date(date_str)
+        except Exception:
+            idx = A.load_report_index(self.target)
+            out = []
+            for r in idx.get("reports", []):
+                f, t = r.get("from", ""), r.get("to", "")
+                if f and t and f <= date_str <= t:
+                    item = dict(r)
+                    try:
+                        from datetime import date as _date
+                        item["day_index"] = (_date.fromisoformat(date_str)
+                                             - _date.fromisoformat(f)).days + 1
+                    except Exception:
+                        item["day_index"] = 0
+                    out.append(item)
+            out.sort(key=lambda r: (r.get("to", ""), r.get("generated_at", "")), reverse=True)
+            return out
+
+    def sessions_for(self, workspace: str, limit: int = 50) -> list:
+        """按工作区查会话明细（空壳项目详情兜底用）。"""
+        try:
+            return self._db().sessions_by_workspace(workspace, limit=limit)
+        except Exception:
+            return []
 
     def _summary_title(self, st: dict) -> str:
         adir = self.target / (st.get("dir") or "")
@@ -324,9 +342,25 @@ class ManageStore:
         conv = A.parse_conversations(adir / A.META_DIR / A.CONVERSATIONS_FILE) if adir.exists() else []
         files = [str(Path(p).as_posix()) for p in A.walk_source(adir)][:200] if adir.exists() else []
         links = []
+        seen_sid = set()
         for c in conv[:12]:
             links.append({"title": c.get("title") or "", "time": c.get("time") or "",
                           "link": c.get("link") or ""})
+            if c.get("sid"):
+                seen_sid.add(c["sid"])
+        # 空壳项目没有归档目录 → 没有 conversations.md。兜底：从 SQLite sessions 表
+        # 按工作区路径查原始会话，生成深链，恢复「打开原对话」入口。
+        if not links:
+            from datetime import datetime as _dt
+            for s in self.sessions_for(key)[:12]:
+                if s.get("sid") in seen_sid:
+                    continue
+                ts = s.get("created") or 0
+                tstr = (_dt.fromtimestamp(ts / 1000).strftime("%Y-%m-%d %H:%M")
+                        if ts else "")
+                links.append({"title": s.get("title") or "原始对话",
+                              "time": tstr, "link": s.get("link") or ""})
+                seen_sid.add(s.get("sid"))
         return {
             **item,
             "summary": s.get("summary") or s.get("purpose") or "",

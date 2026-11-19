@@ -3725,11 +3725,26 @@ def cmd_report(target: Path, sources=None, days: int = 30, end: str = "",
     path = out_dir / f"report-{d['from']}_{d['to']}.html"
     atomic_write(path, text)
 
-    # 登记到档案索引（与归档器其它写操作共用互斥锁）
+    # 登记到档案索引：SQLite 为主 + JSON 兼容镜像（双写，与归档器共用互斥锁）
     try:
+        import report_store as R
         with Lock(target):
-            is_new = index_report(target, d, path)
-        print(f"  档案索引：{'新增' if is_new else '更新'} {path.name}")
+            R.init_schema(target)
+            is_new = index_report(target, d, path)          # JSON 镜像
+            db = R.ReportDB(target)
+            db.upsert_report({
+                "name": path.name, "source": "all",
+                "from": d.get("from", ""), "to": d.get("to", ""),
+                "days": d.get("days", 0), "generated_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                "prompts": d.get("totals", {}).get("prompts", 0),
+                "sessions": d.get("totals", {}).get("sessions", 0),
+                "projects": d.get("totals", {}).get("projects", 0),
+                "files": d.get("totals", {}).get("files", 0),
+                "tokens": d.get("totals", {}).get("tok_in", 0) + d.get("totals", {}).get("tok_out", 0),
+                "sha256": sha1_file(path), "bytes": path.stat().st_size if path.exists() else 0,
+            })
+            db.touch_updated()
+        print(f"  档案索引：{'新增' if is_new else '更新'} {path.name}（SQLite + JSON）")
     except Exception as e:
         # 索引失败不影响报告本身已落盘
         print(f"  警告：档案索引登记失败（报告已写入）：{e}")
@@ -5375,7 +5390,8 @@ def main():
     ap.add_argument("cmd",
                     choices=["scan", "render", "run", "pending", "status",
                              "git-clean", "daylog", "log", "find", "stats", "report",
-                             "report-backfill", "restore", "sync", "manage"],
+                             "report-backfill", "report-migrate", "sessions-sync",
+                             "restore", "sync", "manage"],
                     help="scan=采集/render=渲染/run=全流程/pending=待归纳/status=状态/"
                          "git-clean=重建归档器创建的 git 仓库以清除历史大对象/"
                          "daylog=按天汇总开发活动（预览，零写入）/"
@@ -5384,6 +5400,8 @@ def main():
                          "stats=跨天账本：最近 N 天的对话/文件/token（只读）/"
                          "report=写成单文件 HTML 账本（可截图分享）/"
                          "report-backfill=把已有 HTML 报告补登记进档案索引/"
+                         "report-migrate=把 JSON 索引迁到 SQLite 并抽取会话明细/"
+                         "sessions-sync=从各平台转录刷新 sessions 表/"
                          "restore=按日恢复归档快照到副本目录（默认只预览）/"
                          "sync=归档仓库同步：看哪些没推，或 --push 推到各自远端/"
                          "manage=本地浏览器管理台（--port 可改端口，仅监听 127.0.0.1）")
@@ -5464,6 +5482,19 @@ def main():
         with Lock(target):
             n = backfill_report_index(target)
         print(f"补登 {n} 份存量报告到档案索引")
+        return 0
+    if a.cmd in ("report-migrate", "sessions-sync"):
+        import report_store as R
+        if a.cmd == "report-migrate":
+            with Lock(target):
+                result = R.migrate_from_json(target)
+            print(f"迁移完成：报告 {result['reports']} 条、会话 {result['sessions']} 条")
+            print(f"  数据库：{R.db_path(target)}（旧 report_index.json 已保留）")
+        else:
+            with Lock(target):
+                R.init_schema(target)
+                n = R.ReportDB(target).replace_sessions(build_index(get_adapters()))
+            print(f"会话明细已刷新：{n} 条")
         return 0
     if a.cmd == "find":
         # 只读命令：不加锁、不写任何文件
