@@ -5265,7 +5265,7 @@ def main():
     ap.add_argument("cmd",
                     choices=["scan", "render", "run", "pending", "status",
                              "git-clean", "daylog", "log", "find", "stats", "report",
-                             "restore", "sync"],
+                             "restore", "sync", "manage"],
                     help="scan=采集/render=渲染/run=全流程/pending=待归纳/status=状态/"
                          "git-clean=重建归档器创建的 git 仓库以清除历史大对象/"
                          "daylog=按天汇总开发活动（预览，零写入）/"
@@ -5274,7 +5274,8 @@ def main():
                          "stats=跨天账本：最近 N 天的对话/文件/token（只读）/"
                          "report=写成单文件 HTML 账本（可截图分享）/"
                          "restore=按日恢复归档快照到副本目录（默认只预览）/"
-                         "sync=归档仓库同步：看哪些没推，或 --push 推到各自远端")
+                         "sync=归档仓库同步：看哪些没推，或 --push 推到各自远端/"
+                         "manage=本地浏览器管理台（--port 可改端口，仅监听 127.0.0.1）")
     ap.add_argument("query", nargs="?", default="",
                     help="find 的检索词，可空格分隔多个词（全部命中才计入）")
     ap.add_argument("--open", action="store_true", dest="open_it",
@@ -5311,11 +5312,27 @@ def main():
     ap.add_argument("--push", action="store_true",
                     help="sync 真正提交并推送到各归档仓库自己配的远端（默认只预览；"
                          "未配远端的不推，永不 force）")
+    ap.add_argument("--port", type=int, default=8765,
+                    help="manage 管理台监听端口（默认 8765；0 表示自动选空闲端口）")
+    ap.add_argument("--no-browser", action="store_true",
+                    help="manage 启动时不自动打开浏览器")
     a = ap.parse_args()
 
     sources = [x.strip() for x in (a.source or "").split(",") if x.strip()]
 
     target = Path(a.target)
+    if a.cmd == "manage":
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from manage_ui import main as manage_main
+        argv = ["--target", str(target), "--port", str(a.port)]
+        if a.no_browser:
+            argv.append("--no-browser")
+        old_argv = sys.argv
+        sys.argv = [sys.argv[0]] + argv
+        try:
+            return manage_main()
+        finally:
+            sys.argv = old_argv
     if a.cmd == "daylog":
         # 只读命令：不需要目标目录，也不加锁
         return run_daylog(target, a.date or datetime.now().strftime("%Y-%m-%d"),
