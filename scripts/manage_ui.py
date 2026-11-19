@@ -86,6 +86,25 @@ def verify_password(cfg: dict, password: str) -> bool:
         return False
 
 
+def change_password(new_pw: str) -> dict:
+    """用新口令重写 salt+hash（明文不落盘），并更新进程内 Handler.cfg。
+
+    调用方须先通过 authenticated + check_csrf，并校验旧口令。
+    """
+    salt = secrets.token_hex(16)
+    cfg = {"salt": salt,
+           "hash": hashlib.pbkdf2_hmac("sha256", new_pw.encode(), bytes.fromhex(salt),
+                                       PBKDF2_ROUNDS).hex(),
+           "rounds": PBKDF2_ROUNDS}
+    A.atomic_write(auth_path(Handler.target), json.dumps(cfg, indent=2) + "\n")
+    try:
+        os.chmod(str(auth_path(Handler.target)), 0o600)
+    except Exception:
+        pass
+    Handler.cfg = cfg
+    return {"changed": True}
+
+
 class Sessions:
     def __init__(self):
         self.lock = threading.Lock()
@@ -244,6 +263,30 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 self.err(str(e), 500)
             return
+        if path in ("/api/overview", "/api/ranking"):
+            if not self.authenticated():
+                return self.err("未登录", 401)
+            try:
+                s = self.store()
+                data = s.overview() if path.endswith("overview") else s.ranking()
+                self.json_out({"ok": True, "data": data})
+            except Exception as e:
+                self.err(str(e), 500)
+            return
+        if path == "/api/report":
+            if not self.authenticated():
+                return self.err("未登录", 401)
+            q = parse_qs(urlparse(self.path).query)
+            try:
+                days = max(1, min(int((q.get("days") or ["30"])[0]), 366))
+                end = (q.get("end") or [""])[0]
+                d = A.report_data(days=days, end=end)
+                if not d.get("ok"):
+                    return self.err(d.get("msg") or "报告生成失败", 400)
+                self.json_out({"ok": True, "data": d})
+            except Exception as e:
+                self.err(str(e), 500)
+            return
         self.err("未找到", 404)
 
     def do_POST(self):
@@ -269,6 +312,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.json_out({"ok": True}, extra={
                 "Set-Cookie": f"{COOKIE_NAME}=; HttpOnly; SameSite=Strict; "
                               "Path=/; Max-Age=0"})
+            return
+        if path == "/api/password":
+            if not self.authenticated():
+                return self.err("登录已过期，请重新登录", 401)
+            if not self.check_csrf():
+                return self.err("CSRF 校验失败，请刷新页面", 403)
+            b = self.body_json()
+            old, new = str(b.get("old") or ""), str(b.get("new") or "")
+            if not verify_password(self.cfg, old):
+                return self.err("原口令不正确", 400)
+            if len(new) < 6:
+                return self.err("新口令至少 6 个字符", 400)
+            with LOCK:
+                with A.Lock(self.target):
+                    try:
+                        self.json_out({"ok": True, "data": change_password(new)})
+                    except Exception as e:
+                        self.err(f"修改失败：{e}", 500)
             return
 
         routes = {

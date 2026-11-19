@@ -7,14 +7,24 @@
 - 不引入第三方依赖，复用 archiver.py 已有的工具函数。
 """
 import json
+import math
 import os
 import re
 import shutil
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import archiver as A
+
+# 活跃度算法参数（集中在此，便于调权与单测）
+ACT_RECENCY_HALFLIFE = 30      # 近期性半衰期（天）：30 天前得分减半
+ACT_FREQ_SCALE = 25.0          # 频次系数：25*log2(1+sessions)
+ACT_OUTPUT_SCALE = 12.0        # 产出系数：12*log2(1+files)
+ACT_CONSISTENCY_FULL = 10      # 持续度满分所需的不同活跃天数
+ACT_WEIGHTS = {"recency": 0.4, "freq": 0.3, "output": 0.2, "consistency": 0.1}
+ACT_SPARK_DAYS = 14            # 迷你图窗口天数
+ACT_LEVELS = ((70, "hot"), (45, "active"), (20, "calm"), (0, "idle"))
 
 # 人工字段（写入 overrides.json 的单个条目）
 MANUAL_FIELDS = ("title", "purpose", "type", "pinned", "watching", "note", "skip")
@@ -26,6 +36,82 @@ BACKUP_DIR = "_trash/_manage_backups"
 def norm_key(key: str) -> str:
     """把工作区路径规范化为 state.json / overrides.json 共用的键"""
     return (key or "").replace("\\", "/").rstrip("/").lower()
+
+
+# ---------------------------------------------------------------- 活跃度算法
+
+def conv_day_counts(adir: Path) -> dict:
+    """从 _meta/conversations.md 聚合「每日会话数」与活跃日期集合。
+
+    conversations.md 的「时间」字段来自 A.iso()，形如 '2026-11-18 09:30'；
+    取前 10 位即 YYYY-MM-DD。文件缺失/损坏时返回空 dict（降级：持续度=0、迷你图全零）。
+    """
+    try:
+        conv = A.parse_conversations(adir / A.META_DIR / A.CONVERSATIONS_FILE)
+    except Exception:
+        return {}
+    counts = {}
+    for c in conv:
+        d = (c.get("time") or "")[:10]
+        if re.match(r"^\d{4}-\d{2}-\d{2}$", d):
+            counts[d] = counts.get(d, 0) + 1
+    return counts
+
+
+def activity_of(st: dict, adir: Path, today: datetime = None) -> dict:
+    """计算单个项目的活跃度（0-100）与近 N 天迷你图数据。
+
+    四维加权（近期性 40% / 频次 30% / 产出 20% / 持续度 10%）：
+    - 近期性 R = 100 * 0.5^(距今天数 / 半衰期)，越近越高；
+    - 频次   F = min(100, 25*log2(1+会话数))，对数压缩避免头部碾压；
+    - 产出   O = min(100, 12*log2(1+文件数))；
+    - 持续度 C = min(100, 活跃天数 / 10 * 100)，来自会话明细的不同日期数。
+
+    today 可注入以便单测固定「今天」。返回分项分数便于前端解释与调参。
+    """
+    today = (today or datetime.now()).date()
+    sessions = int(st.get("sessions") or 0)
+    files = int(st.get("files") or 0)
+    last_ts = st.get("last_ts")
+    last_day = A.day(last_ts) if last_ts else ""
+
+    # 近期性：距今天数（last_ts 为毫秒）
+    try:
+        age = max(0, (today - datetime.strptime(last_day, "%Y-%m-%d").date()).days) \
+            if last_day else 9999
+    except Exception:
+        age = 9999
+    recency = 100.0 * (0.5 ** (age / float(ACT_RECENCY_HALFLIFE)))
+    freq = min(100.0, ACT_FREQ_SCALE * math.log2(1 + sessions))
+    output = min(100.0, ACT_OUTPUT_SCALE * math.log2(1 + files))
+
+    counts = conv_day_counts(adir) if adir else {}
+    active_days = len(counts)
+    consistency = min(100.0, active_days / float(ACT_CONSISTENCY_FULL) * 100.0)
+
+    score = int(round(ACT_WEIGHTS["recency"] * recency
+                      + ACT_WEIGHTS["freq"] * freq
+                      + ACT_WEIGHTS["output"] * output
+                      + ACT_WEIGHTS["consistency"] * consistency))
+    score = max(0, min(100, score))
+    level = next(name for threshold, name in ACT_LEVELS if score >= threshold)
+
+    spark = []
+    for i in range(ACT_SPARK_DAYS - 1, -1, -1):
+        d = (today - timedelta(days=i)).isoformat()
+        spark.append({"date": d, "count": counts.get(d, 0)})
+
+    return {
+        "score": score,
+        "level": level,
+        "active_days": active_days,
+        "age_days": age if age < 9999 else None,
+        "parts": {
+            "recency": round(recency, 1), "freq": round(freq, 1),
+            "output": round(output, 1), "consistency": round(consistency, 1),
+        },
+        "spark": spark,
+    }
 
 
 class ManageError(Exception):
@@ -87,7 +173,9 @@ class ManageStore:
             ov = self.overrides.get(norm_key(key)) or self.overrides.get(
                 (st.get("dir") or "").lower(), {})
             name = ov.get("title") or self._summary_title(st) or st.get("name") or ""
+            adir = self.target / (st.get("dir") or "")
             out.append({
+                "activity": activity_of(st, adir) if adir.exists() else None,
                 "key": key,
                 "dir": st.get("dir") or "",
                 "name": name,
@@ -114,6 +202,64 @@ class ManageStore:
         out.sort(key=lambda x: (not x["pinned"], x["last_dev"]), reverse=False)
         out.sort(key=lambda x: x["pinned"], reverse=True)
         return out
+
+    def overview(self) -> dict:
+        """数据概览：整体情况，全部来自 state/overrides，不触发会话解析以外的重活。"""
+        items = self.projects()
+        watching = [p for p in items if p["watching"] and not p["skip"]]
+        by_type, by_lang, by_level = {}, {}, {}
+        total_files = total_bytes = 0
+        for p in items:
+            by_type[p["type"] or "未分类"] = by_type.get(p["type"] or "未分类", 0) + 1
+            lang = p["language"] or "未标注"
+            by_lang[lang] = by_lang.get(lang, 0) + 1
+            act = p.get("activity")
+            if act:
+                by_level[act["level"]] = by_level.get(act["level"], 0) + 1
+            total_files += int(p["files"] or 0)
+            total_bytes += int(p["bytes"] or 0)
+
+        # 近 14 天全局活动量：把各项目迷你图按天相加
+        spark_days = ACT_SPARK_DAYS
+        spark = [0] * spark_days
+        for p in items:
+            act = p.get("activity")
+            if not act:
+                continue
+            for i, pt in enumerate(act.get("spark") or []):
+                if i < spark_days:
+                    spark[i] += int(pt.get("count") or 0)
+
+        # 最近更新的关注中项目（Top 8）
+        recent = sorted(watching, key=lambda p: p["last_dev"] or "", reverse=True)[:8]
+        recent = [{"name": p["name"], "last_dev": p["last_dev"],
+                   "score": (p.get("activity") or {}).get("score")} for p in recent]
+
+        days = [p["first_dev"] for p in items if p.get("first_dev")]
+        return {
+            "total": len(items),
+            "watching": len(watching),
+            "archived": sum(1 for p in items if p["archived"]),
+            "total_files": total_files,
+            "total_bytes": total_bytes,
+            "by_type": by_type,
+            "by_lang": dict(sorted(by_lang.items(), key=lambda kv: -kv[1])),
+            "by_level": by_level,
+            "spark": spark,
+            "recent": recent,
+            "span": {"from": min(days) if days else "", "to": max(days) if days else ""},
+        }
+
+    def ranking(self, limit: int = 20) -> list:
+        """活跃度排行：按分数降序，忽略无 activity 的项。"""
+        items = [p for p in self.projects()
+                 if p.get("activity") and p["watching"] and not p["skip"]]
+        items.sort(key=lambda p: p["last_dev"] or "", reverse=True)  # 同分：近的在前
+        items.sort(key=lambda p: p["activity"]["score"], reverse=True)  # 主排序：分数降序
+        return [{"name": p["name"], "dir": p["dir"], "key": p["key"],
+                 "score": p["activity"]["score"], "level": p["activity"]["level"],
+                 "sessions": p["sessions"], "last_dev": p["last_dev"],
+                 "spark": p["activity"]["spark"]} for p in items[:limit]]
 
     def _summary_title(self, st: dict) -> str:
         adir = self.target / (st.get("dir") or "")

@@ -31,7 +31,10 @@ def build_target(tmp: Path):
     adir = tmp / "2026-01-01_旧显示名"
     adir.mkdir()
     A.atomic_write(adir / "_summary.json", '{"title":"LLM名","purpose":"测试用途"}')
-    A.atomic_write(adir / A.META_DIR / "conversations.md", "")
+    conv = ("# 原始对话索引\n\n## 1. 测试会话\n\n"
+            "| 项 | 值 |\n|---|---|\n| 时间 | 2026-01-01 09:30 |\n\n"
+            "1. 第一条指令\n")
+    A.atomic_write(adir / A.META_DIR / "conversations.md", conv)
     return tmp
 
 
@@ -98,6 +101,38 @@ def main():
     d = json.loads(body)
     rows = d.get("data", [])
     check("列表含 1 项目", code == 200 and len(rows) == 1, len(rows))
+    act = rows[0].get("activity") if rows else None
+    check("列表附带活跃度", bool(act) and 0 <= act["score"] <= 100,
+          act and act["score"])
+    check("活跃度含 14 天迷你图", bool(act) and len(act.get("spark", [])) == 14,
+          act and len(act.get("spark", [])))
+
+    # 5b. 数据概览
+    code, body = get("/api/overview")
+    ov = json.loads(body).get("data", {})
+    check("概览总数正确", code == 200 and ov.get("total") == 1, ov.get("total"))
+    check("概览含类型分布", isinstance(ov.get("by_type"), dict), ov.get("by_type"))
+    check("概览含活动量序列", len(ov.get("spark", [])) == 14, len(ov.get("spark", [])))
+
+    # 5c. 活跃度排行
+    code, body = get("/api/ranking")
+    rank = json.loads(body).get("data", [])
+    check("排行含项目", code == 200 and len(rank) == 1, len(rank))
+
+    # 5d. 报告接口
+    code, body = get("/api/report?days=7")
+    rep = json.loads(body).get("data", {})
+    check("报告接口返回数据", code == 200 and rep.get("ok") and "totals" in rep,
+          rep.get("msg"))
+
+    # 5e. 改口令接口（CSRF + 旧口令校验）
+    code, d = post("/api/password", {"old": "bad", "new": "newpass123"}, csrf)
+    check("改口令-旧口令错误 400", code == 400, d.get("error"))
+    code, d = post("/api/password", {"old": pw, "new": "short"}, csrf)
+    check("改口令-新口令过短 400", code == 400, d.get("error"))
+    code, d = post("/api/password", {"old": pw, "new": "newpass123"}, csrf)
+    check("改口令成功", code == 200 and d.get("data", {}).get("changed"), d)
+    check("新口令可验证", manage_ui.verify_password(manage_ui.Handler.cfg, "newpass123"))
 
     key = "c:/test/ws1"
     # 6. 改名只改显示名

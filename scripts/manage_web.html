@@ -9,11 +9,12 @@
     --bg: #0f1115; --panel: #191c22; --panel2: #22262e; --line: #303540;
     --text: #e6e8ec; --muted: #9aa2b1; --accent: #5b9cff; --danger: #e05b5b;
     --ok: #4caf82; --warn: #e0a94c;
+    --hot: #e05b5b; --active: #5b9cff; --calm: #9aa2b1; --idle: #5a6270;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text);
          font: 14px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
-  button, input, textarea { font: inherit; }
+  button, input, textarea, select { font: inherit; }
   a { color: var(--accent); text-decoration: none; }
   .hidden { display: none !important; }
 
@@ -23,10 +24,10 @@
                 border-radius: 12px; padding: 32px; }
   .login-card h1 { margin: 0 0 6px; font-size: 20px; }
   .login-card p { color: var(--muted); margin: 0 0 20px; font-size: 13px; }
-  input[type=password], input[type=text], textarea {
+  input[type=password], input[type=text], textarea, select {
     width: 100%; background: var(--panel2); color: var(--text);
     border: 1px solid var(--line); border-radius: 6px; padding: 9px 12px; outline: none; }
-  input:focus, textarea:focus { border-color: var(--accent); }
+  input:focus, textarea:focus, select:focus { border-color: var(--accent); }
   .btn { background: var(--accent); color: #fff; border: 0; border-radius: 6px;
          padding: 9px 16px; cursor: pointer; }
   .btn:hover { filter: brightness(1.1); }
@@ -37,25 +38,40 @@
   #login .btn { width: 100%; margin-top: 16px; }
   .err { color: var(--danger); font-size: 13px; min-height: 20px; margin-top: 8px; }
 
-  /* 主界面 */
-  header { display: flex; align-items: center; gap: 12px; padding: 14px 22px;
+  /* 主框架：左树 + 右内容 */
+  header { display: flex; align-items: center; gap: 12px; padding: 12px 20px;
            border-bottom: 1px solid var(--line); background: var(--panel); }
-  header h1 { margin: 0; font-size: 16px; flex: 1; }
+  header h1 { margin: 0; font-size: 15px; flex: 1; }
   header .stat { color: var(--muted); font-size: 12px; }
-  main { padding: 18px 22px; }
+  #shell { display: flex; min-height: calc(100vh - 53px); }
+  #nav { width: 190px; flex: 0 0 190px; background: var(--panel);
+         border-right: 1px solid var(--line); padding: 14px 10px; }
+  #nav .grp { color: var(--muted); font-size: 11px; letter-spacing: .05em;
+              padding: 14px 10px 6px; }
+  #nav .item { display: block; width: 100%; text-align: left; padding: 8px 10px;
+               border: 0; border-radius: 6px; background: transparent; color: var(--text);
+               cursor: pointer; font-size: 13px; }
+  #nav .item:hover { background: var(--panel2); }
+  #nav .item.on { background: var(--accent); color: #fff; }
+  #nav .item .ic { display: inline-block; width: 18px; }
+  #content { flex: 1; padding: 18px 22px; min-width: 0; }
+  .view h2 { margin: 0 0 14px; font-size: 17px; }
+  .view .sub { color: var(--muted); font-size: 12px; margin: -8px 0 16px; }
+
+  /* 工具栏、表格 */
   .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
-  .toolbar input[type=text] { width: 280px; }
+  .toolbar input[type=text] { width: 240px; }
+  .toolbar select { width: auto; padding: 8px 10px; }
   .seg { display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
   .seg button { background: var(--panel2); color: var(--muted); border: 0;
                 padding: 8px 14px; cursor: pointer; }
   .seg button.on { background: var(--accent); color: #fff; }
-
   table { width: 100%; border-collapse: collapse; background: var(--panel);
           border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
   th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--line); }
   th { color: var(--muted); font-weight: 500; font-size: 12px; background: var(--panel2); }
   tr:last-child td { border-bottom: 0; }
-  tr:hover td { background: #1d2129; }
+  tbody tr:hover td { background: #1d2129; }
   .name { font-weight: 600; cursor: pointer; }
   .tag { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 4px;
          margin-left: 6px; border: 1px solid var(--line); color: var(--muted); }
@@ -64,6 +80,30 @@
   .tag.manual { color: var(--ok); border-color: var(--ok); }
   .actions { display: flex; gap: 5px; flex-wrap: wrap; }
   .muted { color: var(--muted); font-size: 12px; }
+
+  /* 活跃度徽标 + 迷你图 */
+  .act-cell { display: flex; align-items: center; gap: 8px; }
+  .score { font-variant-numeric: tabular-nums; font-weight: 600; min-width: 22px; }
+  .lv-hot { color: var(--hot); } .lv-active { color: var(--active); }
+  .lv-calm { color: var(--calm); } .lv-idle { color: var(--idle); }
+  .spark { display: flex; align-items: flex-end; gap: 2px; height: 20px; }
+  .spark i { width: 4px; background: var(--accent); border-radius: 1px; min-height: 2px; opacity: .85; }
+
+  /* 概览卡片 */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .card .k { color: var(--muted); font-size: 12px; }
+  .card .v { font-size: 26px; font-weight: 600; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+           padding: 16px; margin-bottom: 16px; }
+  .panel h3 { margin: 0 0 12px; font-size: 13px; color: var(--muted); font-weight: 500; }
+  .bar-row { display: flex; align-items: center; gap: 10px; margin: 6px 0; font-size: 12px; }
+  .bar-row .lb { width: 110px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar-row .track { flex: 1; background: var(--panel2); border-radius: 3px; height: 10px; overflow: hidden; }
+  .bar-row .fill { height: 100%; background: var(--accent); border-radius: 3px; }
+  .bar-row .num { width: 34px; text-align: right; font-variant-numeric: tabular-nums; }
+  .bigspark { display: flex; align-items: flex-end; gap: 3px; height: 70px; padding-top: 6px; }
+  .bigspark i { flex: 1; background: var(--accent); border-radius: 2px 2px 0 0; min-height: 2px; }
 
   /* 详情抽屉 */
   #mask { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 10; }
@@ -78,7 +118,7 @@
   .kv dd { margin: 0; word-break: break-all; }
   .sec { margin-top: 20px; }
   .sec h3 { font-size: 13px; color: var(--muted); margin: 0 0 8px;
-            border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+            border-bottom: 1px solid var(--line); padding-bottom: 6px; font-weight: 500; }
   textarea { min-height: 70px; resize: vertical; }
   .row { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
   .row input[type=text] { flex: 1; }
@@ -86,6 +126,11 @@
   #toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
            background: var(--panel2); border: 1px solid var(--line); padding: 10px 18px;
            border-radius: 8px; z-index: 20; display: none; }
+  .pager { display: flex; gap: 6px; align-items: center; justify-content: flex-end;
+           margin-top: 12px; font-size: 12px; color: var(--muted); }
+  .pager button { background: var(--panel2); border: 1px solid var(--line); color: var(--text);
+                  border-radius: 5px; padding: 3px 9px; cursor: pointer; }
+  .pager button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
 </style>
 </head>
 <body>
@@ -106,24 +151,126 @@
     <span class="stat" id="stat"></span>
     <button class="btn ghost sm" id="logoutBtn">退出</button>
   </header>
-  <main>
-    <div class="toolbar">
-      <input type="text" id="q" placeholder="搜索项目名 / 目录 / 语言…">
-      <div class="seg">
-        <button id="tabWatch" class="on">关注中</button>
-        <button id="tabAll">全部</button>
-      </div>
-      <button class="btn ghost sm" id="refreshBtn">刷新</button>
-    </div>
-    <table>
-      <thead><tr>
-        <th style="width:32%">项目</th><th>类型</th><th>语言</th>
-        <th>最后开发</th><th>会话/文件</th><th>操作</th>
-      </tr></thead>
-      <tbody id="rows"></tbody>
-    </table>
-    <p class="muted" id="hint"></p>
-  </main>
+  <div id="shell">
+    <nav id="nav">
+      <div class="grp">总览</div>
+      <button class="item" data-view="overview"><span class="ic">▦</span>数据概览</button>
+      <div class="grp">管理</div>
+      <button class="item on" data-view="projects"><span class="ic">▤</span>项目管理</button>
+      <div class="grp">分析</div>
+      <button class="item" data-view="ranking"><span class="ic">↑</span>活跃度排行</button>
+      <button class="item" data-view="report"><span class="ic">▧</span>按日期报告</button>
+      <div class="grp">系统</div>
+      <button class="item" data-view="settings"><span class="ic">⚙</span>设置</button>
+    </nav>
+    <main id="content">
+
+      <!-- 项目管理 -->
+      <section class="view" id="view-projects">
+        <h2>项目管理</h2>
+        <p class="sub">筛选、排序并维护纳入监测的项目。活跃度分数按近期性/频次/产出/持续度加权计算。</p>
+        <div class="toolbar">
+          <input type="text" id="q" placeholder="搜索项目名 / 目录 / 语言…">
+          <select id="fType"><option value="">全部类型</option></select>
+          <select id="fLang"><option value="">全部语言</option></select>
+          <select id="fDate">
+            <option value="">全部日期</option>
+            <option value="7">近 7 天</option>
+            <option value="30">近 30 天</option>
+            <option value="90">近 90 天</option>
+          </select>
+          <div class="seg">
+            <button id="tabWatch" class="on">关注中</button>
+            <button id="tabAll">全部</button>
+          </div>
+          <button class="btn ghost sm" id="refreshBtn">刷新</button>
+        </div>
+        <table>
+          <thead><tr>
+            <th style="width:26%">项目</th><th>类型</th><th>语言</th>
+            <th>活跃度</th><th>最后开发</th><th>会话/文件</th><th>操作</th>
+          </tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+        <div class="pager" id="pager"></div>
+        <p class="muted" id="hint"></p>
+      </section>
+
+      <!-- 数据概览 -->
+      <section class="view hidden" id="view-overview">
+        <h2>数据概览</h2>
+        <p class="sub">归档库整体情况，数据来自本地 state 与会话明细。</p>
+        <div class="cards" id="ovCards"></div>
+        <div class="panel">
+          <h3>近 14 天活动量（全部项目会话数之和）</h3>
+          <div class="bigspark" id="ovSpark"></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px" id="ovGrids">
+          <div class="panel"><h3>类型分布</h3><div id="ovType"></div></div>
+          <div class="panel"><h3>活跃度分档</h3><div id="ovLevel"></div></div>
+          <div class="panel"><h3>语言分布 Top 10</h3><div id="ovLang"></div></div>
+          <div class="panel"><h3>最近更新的关注项目</h3><div id="ovRecent"></div></div>
+        </div>
+      </section>
+
+      <!-- 活跃度排行 -->
+      <section class="view hidden" id="view-ranking">
+        <h2>活跃度排行</h2>
+        <p class="sub">关注中项目按活跃度分数降序，同分按最近开发时间。鼠标悬停迷你图可看当日会话数。</p>
+        <div class="panel" style="padding:0;overflow:hidden">
+          <table>
+            <thead><tr><th style="width:50px">#</th><th>项目</th><th>活跃度</th><th>近 14 天</th><th>会话数</th><th>最后开发</th></tr></thead>
+            <tbody id="rankRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- 按日期报告 -->
+      <section class="view hidden" id="view-report">
+        <h2>按日期报告</h2>
+        <p class="sub">复用命令行 <code>report</code> 的数据口径，统计区间来自原始对话数据源（与归档视角略有差异）。</p>
+        <div class="toolbar">
+          <label>最近 <input type="number" id="repDays" value="30" min="1" max="366" style="width:80px"> 天</label>
+          <label>截止日 <input type="date" id="repEnd" style="width:150px"></label>
+          <button class="btn sm" id="repBtn">生成报告</button>
+        </div>
+        <div id="repTotals" class="cards"></div>
+        <div class="panel">
+          <h3>每日活动量</h3>
+          <div class="bigspark" id="repSpark"></div>
+        </div>
+        <div class="panel">
+          <h3>项目排行（按对话数）</h3>
+          <div id="repProjects"></div>
+        </div>
+      </section>
+
+      <!-- 设置 -->
+      <section class="view hidden" id="view-settings">
+        <h2>设置</h2>
+        <div class="panel" style="max-width:480px">
+          <h3>修改登录口令</h3>
+          <div class="row"><input type="password" id="oldPw" placeholder="原口令"></div>
+          <div class="row"><input type="password" id="newPw" placeholder="新口令（至少 6 位）"></div>
+          <div class="row"><input type="password" id="newPw2" placeholder="再输一次新口令"></div>
+          <button class="btn sm" id="pwBtn">修改口令</button>
+          <p class="muted" id="pwHint">口令以 PBKDF2 哈希存储，明文不落盘。修改后请用新口令登录。</p>
+        </div>
+        <div class="panel" style="max-width:480px">
+          <h3>列表首选项</h3>
+          <div class="row" style="justify-content:space-between">
+            <span>每页显示</span>
+            <select id="pageSize" style="width:120px">
+              <option value="10">10 条</option><option value="20" selected>20 条</option>
+              <option value="50">50 条</option><option value="0">全部</option>
+            </select>
+          </div>
+          <p class="muted">保存在本机浏览器，仅影响当前管理台列表。</p>
+        </div>
+      </section>
+
+    </main>
+  </div>
 </div>
 
 <div id="mask" class="hidden"></div>
@@ -132,6 +279,10 @@
   <h2 id="dName"></h2>
   <div class="muted" id="dDir"></div>
   <dl class="kv" id="dKv"></dl>
+  <div class="sec">
+    <h3>活跃度明细</h3>
+    <div id="dAct"></div>
+  </div>
   <div class="sec">
     <h3>用途</h3>
     <div id="dPurpose"></div>
@@ -177,8 +328,13 @@ let csrf = '';
 let projects = [];
 let mode = 'watch';   // watch | all
 let curKey = '';
+let curView = 'projects';
+let page = 1;
+let pageSize = 20;
 
 const $ = id => document.getElementById(id);
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function toast(msg) {
   $('toast').textContent = msg;
   $('toast').style.display = 'block';
@@ -211,6 +367,24 @@ function showApp() {
   $('app').classList.remove('hidden');
 }
 
+/* ---------- 导航 ---------- */
+document.querySelectorAll('#nav .item').forEach(btn => {
+  btn.onclick = () => switchView(btn.dataset.view);
+});
+function switchView(view) {
+  curView = view;
+  document.querySelectorAll('#nav .item').forEach(b => b.classList.toggle('on', b.dataset.view === view));
+  document.querySelectorAll('.view').forEach(v => v.classList.toggle('hidden', v.id !== 'view-' + view));
+  if (view === 'overview') loadOverview();
+  if (view === 'ranking') loadRanking();
+  if (view === 'report' && !$('repEnd').value) $('repEnd').value = todayStr();
+}
+function todayStr() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+
+/* ---------- 登录 ---------- */
 $('loginBtn').onclick = async () => {
   $('loginErr').textContent = '';
   const r = await post('/api/login', {password: $('pw').value});
@@ -224,10 +398,13 @@ $('pw').onkeydown = e => { if (e.key === 'Enter') $('loginBtn').click(); };
 $('logoutBtn').onclick = async () => {
   await post('/api/logout', {}); csrf = ''; projects = []; showLogin();
 };
+
+/* ---------- 项目管理 ---------- */
 $('refreshBtn').onclick = load;
-$('q').oninput = renderRows;
-$('tabWatch').onclick = () => { mode = 'watch'; syncTabs(); renderRows(); };
-$('tabAll').onclick = () => { mode = 'all'; syncTabs(); renderRows(); };
+$('q').oninput = () => { page = 1; renderRows(); };
+['fType','fLang','fDate'].forEach(id => $(id).onchange = () => { page = 1; renderRows(); });
+$('tabWatch').onclick = () => { mode = 'watch'; page = 1; syncTabs(); renderRows(); };
+$('tabAll').onclick = () => { mode = 'all'; page = 1; syncTabs(); renderRows(); };
 function syncTabs() {
   $('tabWatch').classList.toggle('on', mode === 'watch');
   $('tabAll').classList.toggle('on', mode === 'all');
@@ -239,28 +416,68 @@ async function load() {
   projects = r.data;
   const watch = projects.filter(p => p.watching && !p.skip).length;
   $('stat').textContent = `共 ${projects.length} 项 · 关注中 ${watch} · 已归档 ${projects.filter(p=>p.archived).length}`;
+  fillFilters();
   renderRows();
 }
-
-function renderRows() {
+function fillFilters() {
+  const types = [...new Set(projects.map(p => p.type).filter(Boolean))].sort();
+  const langs = [...new Set(projects.flatMap(p => (p.language||'').split('/').map(s=>s.trim()).filter(Boolean)))].sort();
+  const keepT = $('fType').value, keepL = $('fLang').value;
+  $('fType').innerHTML = '<option value="">全部类型</option>' + types.map(t=>`<option>${esc(t)}</option>`).join('');
+  $('fLang').innerHTML = '<option value="">全部语言</option>' + langs.map(t=>`<option>${esc(t)}</option>`).join('');
+  $('fType').value = keepT; $('fLang').value = keepL;
+}
+function inDate(p, days) {
+  if (!days) return true;
+  if (!p.last_dev) return false;
+  const then = new Date(p.last_dev + 'T00:00:00');
+  return (Date.now() - then.getTime()) <= Number(days) * 86400000;
+}
+function filtered() {
   const q = $('q').value.trim().toLowerCase();
-  const list = projects.filter(p => {
+  const t = $('fType').value, lang = $('fLang').value, days = $('fDate').value;
+  return projects.filter(p => {
     if (mode === 'watch' && (!p.watching || p.skip)) return false;
+    if (t && p.type !== t) return false;
+    if (lang && !(p.language||'').includes(lang)) return false;
+    if (!inDate(p, days)) return false;
     if (!q) return true;
     return (p.name + ' ' + p.dir + ' ' + p.language + ' ' + p.purpose).toLowerCase().includes(q);
   });
-  $('hint').textContent = `显示 ${list.length} / ${projects.length} 项`
-    + (mode === 'watch' ? '（点「全部」可查看已取消关注的项目）' : '（含已取消关注）');
-  $('rows').innerHTML = list.map(p => `
+}
+function sparkHTML(spark) {
+  if (!spark || !spark.length) return '<span class="muted">—</span>';
+  const mx = Math.max(1, ...spark.map(x => x.count||0));
+  return `<span class="spark" title="近 ${spark.length} 天会话数">` + spark.map(x => {
+    const h = x.count ? Math.max(2, Math.round((x.count/mx)*20)) : 2;
+    return `<i style="height:${h}px" title="${esc(x.date)}：${x.count} 次会话"></i>`;
+  }).join('') + '</span>';
+}
+function actHTML(act) {
+  if (!act) return '<span class="muted">—</span>';
+  const lv = act.level;
+  const label = {hot:'高热',active:'活跃',calm:'平稳',idle:'沉寂'}[lv] || lv;
+  return `<span class="act-cell"><span class="score lv-${lv}" title="${label}">${act.score}</span>${sparkHTML(act.spark)}</span>`;
+}
+function renderRows() {
+  const list = filtered();
+  pageSize = Number($('pageSize').value || 20);
+  const pages = pageSize ? Math.max(1, Math.ceil(list.length / pageSize)) : 1;
+  if (page > pages) page = pages;
+  const slice = pageSize ? list.slice((page-1)*pageSize, page*pageSize) : list;
+  $('hint').textContent = `显示 ${slice.length} / ${list.length} 项（总 ${projects.length}）`
+    + (mode === 'watch' ? ' · 点「全部」查看已取消关注' : ' · 含已取消关注');
+  $('rows').innerHTML = slice.map(p => `
     <tr>
       <td><span class="name" onclick="detail('${encodeURIComponent(p.key)}')">${esc(p.name)}</span>
-        ${p.pinned ? '<span class="tag pin">📌置顶</span>' : ''}
+        ${p.pinned ? '<span class="tag pin">置顶</span>' : ''}
         ${!p.watching ? '<span class="tag off">已取消关注</span>' : ''}
         ${p.skip ? '<span class="tag off">已停止归档</span>' : ''}
         ${p.manual ? '<span class="tag manual">人工命名</span>' : ''}
       </td>
       <td>${esc(p.type)}</td>
       <td>${esc(p.language)}</td>
+      <td>${actHTML(p.activity)}</td>
       <td>${esc(p.last_dev)}</td>
       <td>${p.sessions} / ${p.files}</td>
       <td class="actions">
@@ -268,10 +485,21 @@ function renderRows() {
         <button class="btn ghost sm" onclick="watch('${encodeURIComponent(p.key)}',${!p.watching})">${p.watching ? '取消关注' : '恢复关注'}</button>
         <button class="btn ghost sm" onclick="detail('${encodeURIComponent(p.key)}')">详情</button>
       </td>
-    </tr>`).join('');
+    </tr>`).join('') || '<tr><td colspan="7" class="muted">无匹配项目</td></tr>';
+  renderPager(pages);
 }
-function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c =>
-  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function renderPager(pages) {
+  const el = $('pager');
+  if (pages <= 1) { el.innerHTML = ''; return; }
+  let h = `<span>第 ${page} / ${pages} 页</span>`;
+  h += `<button ${page<=1?'disabled':''} onclick="gotoPage(${page-1})">‹</button>`;
+  const win = 2, lo = Math.max(1, page-win), hi = Math.min(pages, page+win);
+  for (let i = lo; i <= hi; i++) h += `<button class="${i===page?'on':''}" onclick="gotoPage(${i})">${i}</button>`;
+  h += `<button ${page>=pages?'disabled':''} onclick="gotoPage(${page+1})">›</button>`;
+  el.innerHTML = h;
+}
+function gotoPage(n) { page = n; renderRows(); $('content').scrollTop = 0; }
+$('pageSize').onchange = () => { page = 1; try{localStorage.setItem('dpa_pageSize',$('pageSize').value);}catch(e){} renderRows(); };
 
 async function pin(key, val) {
   const r = await post('/api/pin', {key: decodeURIComponent(key), pinned: val});
@@ -282,6 +510,7 @@ async function watch(key, val) {
   if (r.ok) { toast(val ? '已恢复关注' : '已取消关注（归档保留）'); await load(); } else toast(r.error);
 }
 
+/* ---------- 详情抽屉 ---------- */
 async function detail(key) {
   key = decodeURIComponent(key);
   const r = await api('/api/detail?key=' + encodeURIComponent(key));
@@ -299,6 +528,11 @@ async function detail(key) {
     ['独立 git', d.git_repo ? '是' : '否'],
     ['原目录名', d.renamed_from || '—']
   ].map(([k,v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
+  const act = (projects.find(p => p.key === key) || {}).activity;
+  $('dAct').innerHTML = act
+    ? `<div class="act-cell"><span class="score lv-${act.level}">${act.score}</span>${sparkHTML(act.spark)}
+       <span class="muted">活跃天数 ${act.active_days} · 分项 R${act.parts.recency}/F${act.parts.freq}/O${act.parts.output}/C${act.parts.consistency}</span></div>`
+    : '（无会话明细，按降级处理）';
   $('dPurpose').textContent = d.purpose || d.summary || '（无摘要）';
   $('dNote').value = d.note || '';
   $('dNewName').value = d.name;
@@ -343,8 +577,99 @@ $('deleteBtn').onclick = async () => {
   else toast(r.error);
 };
 
-// 启动时探测已有会话
+/* ---------- 数据概览 ---------- */
+async function loadOverview() {
+  const r = await api('/api/overview');
+  if (!r.ok) return toast(r.error);
+  const d = r.data;
+  $('ovCards').innerHTML = [
+    ['监测项目', d.total], ['关注中', d.watching], ['已归档仓库', d.archived],
+    ['源码文件', d.total_files.toLocaleString()],
+    ['源码体积', (d.total_bytes/1048576).toFixed(1) + ' MB'],
+    ['活跃(热+活跃)', (d.by_level.hot||0)+(d.by_level.active||0)]
+  ].map(([k,v])=>`<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+  drawBigSpark('ovSpark', d.spark);
+  $('ovType').innerHTML = bars(d.by_type);
+  $('ovLevel').innerHTML = bars(
+    Object.fromEntries(Object.entries({hot:'高热',active:'活跃',calm:'平稳',idle:'沉寂'})
+      .map(([k,v])=>[v, d.by_level[k]||0])));
+  $('ovLang').innerHTML = bars(Object.fromEntries(Object.entries(d.by_lang).slice(0,10)));
+  $('ovRecent').innerHTML = d.recent.map(p =>
+    `<div class="bar-row"><span class="lb" title="${esc(p.name)}">${esc(p.name)}</span>
+     <span class="num" style="width:auto">${esc(p.last_dev)}</span></div>`).join('') || '<span class="muted">无</span>';
+}
+function bars(obj) {
+  const ent = Object.entries(obj).sort((a,b)=>b[1]-a[1]);
+  const mx = Math.max(1, ...ent.map(x=>x[1]));
+  return ent.map(([k,v])=>`<div class="bar-row"><span class="lb" title="${esc(k)}">${esc(k)}</span>
+    <span class="track"><span class="fill" style="width:${Math.round(v/mx*100)}%"></span></span>
+    <span class="num">${v}</span></div>`).join('') || '<span class="muted">无</span>';
+}
+function drawBigSpark(id, arr) {
+  const mx = Math.max(1, ...arr);
+  $(id).innerHTML = arr.map((v,i)=>`<i style="height:${v?Math.max(3,Math.round(v/mx*64)):2}px" title="第 ${i+1} 天：${v} 次"></i>`).join('');
+}
+
+/* ---------- 活跃度排行 ---------- */
+async function loadRanking() {
+  const r = await api('/api/ranking');
+  if (!r.ok) return toast(r.error);
+  $('rankRows').innerHTML = r.data.map((p,i)=>`
+    <tr>
+      <td>${i+1}</td>
+      <td><span class="name" onclick="detail('${encodeURIComponent(p.key)}')">${esc(p.name)}</span></td>
+      <td><span class="act-cell"><span class="score lv-${p.level}">${p.score}</span>
+        <span class="muted">${{hot:'高热',active:'活跃',calm:'平稳',idle:'沉寂'}[p.level]}</span></span></td>
+      <td>${sparkHTML(p.spark)}</td>
+      <td>${p.sessions}</td>
+      <td>${esc(p.last_dev)}</td>
+    </tr>`).join('') || '<tr><td colspan="6" class="muted">无关注中项目</td></tr>';
+}
+
+/* ---------- 按日期报告 ---------- */
+$('repBtn').onclick = loadReport;
+async function loadReport() {
+  const days = $('repDays').value || 30, end = $('repEnd').value;
+  $('repBtn').disabled = true;
+  const r = await api(`/api/report?days=${encodeURIComponent(days)}&end=${encodeURIComponent(end)}`);
+  $('repBtn').disabled = false;
+  if (!r.ok) return toast(r.error || '报告生成失败');
+  const d = r.data, t = d.totals;
+  $('repTotals').innerHTML = [
+    ['对话数', t.prompts], ['会话数', t.sessions], ['项目数', t.projects],
+    ['改动文件', t.files], ['Token 输入', fmtNum(t.tok_in)], ['Token 输出', fmtNum(t.tok_out)]
+  ].map(([k,v])=>`<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+  drawBigSpark('repSpark', d.daily.map(x=>x.prompts||0));
+  $('repProjects').innerHTML = d.projects.slice(0,15).map(p=>`
+    <div class="bar-row"><span class="lb" title="${esc(p.name)}">${esc(p.name)}</span>
+    <span class="track"><span class="fill" style="width:${Math.round(p.prompts/Math.max(1,d.projects[0].prompts)*100)}%"></span></span>
+    <span class="num">${p.prompts}</span></div>`).join('') || '<span class="muted">无数据</span>';
+}
+function fmtNum(n) {
+  n = Number(n||0);
+  if (n>=1e9) return (n/1e9).toFixed(1)+'B';
+  if (n>=1e6) return (n/1e6).toFixed(1)+'M';
+  if (n>=1e3) return (n/1e3).toFixed(1)+'k';
+  return String(n);
+}
+
+/* ---------- 设置：改口令 ---------- */
+$('pwBtn').onclick = async () => {
+  const old = $('oldPw').value, nw = $('newPw').value, nw2 = $('newPw2').value;
+  if (!old || !nw) return toast('请填写原口令和新口令');
+  if (nw !== nw2) return toast('两次新口令不一致');
+  const r = await post('/api/password', {old, new: nw});
+  if (r.ok) {
+    $('oldPw').value = $('newPw').value = $('newPw2').value = '';
+    $('pwHint').textContent = '✓ 口令已修改，请用新口令重新登录。';
+    $('pwHint').style.color = 'var(--ok)';
+  } else toast(r.error);
+};
+
+/* ---------- 启动 ---------- */
 (async () => {
+  try { const sz = localStorage.getItem('dpa_pageSize'); if (sz) $('pageSize').value = sz; } catch (e) {}
+  pageSize = Number($('pageSize').value || 20);
   const r = await api('/api/session');
   if (r.ok) { csrf = r.csrf; showApp(); await load(); }
   else showLogin();
