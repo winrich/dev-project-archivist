@@ -355,6 +355,11 @@ def md_cell(s, limit: int = 0) -> str:
     return s
 
 
+def norm_key_manage(key: str) -> str:
+    """人工配置键规范化：与管理数据层 norm_key 保持一致"""
+    return (key or "").replace("\\", "/").rstrip("/").lower()
+
+
 def load_overrides(target: Path) -> dict:
     """读取人工校正表，返回 {规范化键: 配置}。键支持工作区路径或归档目录名。
 
@@ -2641,8 +2646,10 @@ def run_render(target: Path, rename=True, verbose=True):
             continue
 
         # 大模型摘要产出后，用摘要标题重命名目录（标题变化时才动）
+        # 人工改名（name_source=manual）优先：防止下次 run 被 LLM 摘要改回去
         s = load_summary(adir)
-        if rename and s.get("title") and st.get("name") != s["title"]:
+        manual_name = st.get("name_source") == "manual"
+        if rename and not manual_name and s.get("title") and st.get("name") != s["title"]:
             new_name = safe_name(s["title"])
             old_dir = st.get("dir", "")
             base = f"{day(st.get('first_ts')) or '0000-00-00'}_{new_name}"
@@ -2696,6 +2703,24 @@ def run_render(target: Path, rename=True, verbose=True):
 def write_index(target: Path, rows: list, state: State, ov: dict = None):
     now = iso(now_ts())
     cache = {}
+    # 管理字段：置顶优先；取消关注只留标记，不删条目（索引始终是完整账本）
+    ov = ov or {}
+    pinned = {k.lower() for k, v in ov.items() if not k.startswith("_")
+              and isinstance(v, dict) and v.get("pinned")}
+    hidden = {k.lower() for k, v in ov.items() if not k.startswith("_")
+              and isinstance(v, dict) and v.get("watching") is False}
+
+    def is_pinned(st, adir):
+        return (norm_key_manage(st.get("workspace")) in pinned
+                or (adir.name or "").lower() in pinned)
+
+    def is_hidden(st, adir):
+        return (norm_key_manage(st.get("workspace")) in hidden
+                or (adir.name or "").lower() in hidden)
+
+    # 置顶项稳定提前；无置顶时保持原顺序（与基线逐字节一致）
+    if pinned:
+        rows = sorted(rows, key=lambda x: not is_pinned(x[0], x[1]))
 
     def nm(st, adir):
         o = pick_override(ov or {}, st.get("workspace"), adir.name)
@@ -2726,6 +2751,10 @@ def write_index(target: Path, rows: list, state: State, ov: dict = None):
         rel = adir.name
         status = st.get("status")
         mark = "" if status == "active" else " ⚠️失联"
+        if is_hidden(st, adir):
+            mark += " 🚫已取消关注"
+        if is_pinned(st, adir):
+            mark += " 📌"
         L.append(f"| {i} | [{name}](./{rel}/README.md){mark} | {day(st.get('first_ts'))} "
                  f"| {day(st.get('last_ts'))} | {day(st.get('last_archived'))} "
                  f"| {st.get('type') or '—'} | {lang} | {st.get('sessions', 0)} "
@@ -2769,18 +2798,33 @@ def write_index(target: Path, rows: list, state: State, ov: dict = None):
     data = {
         "generated_at": now,
         "total": len(rows),
-        "projects": [{
-            "name": nm(st, adir),
-            "dir": st.get("dir"), "type": st.get("type"),
-            "language": effective_summary(adir, cache).get("language") or st.get("language"),
-            "first_dev": day(st.get("first_ts")), "last_dev": day(st.get("last_ts")),
-            "archived_at": day(st.get("last_archived")),
-            "sessions": st.get("sessions", 0), "files": st.get("files", 0),
-            "status": st.get("status"), "workspace": st.get("workspace"),
-            "purpose": (pick_override(ov or {}, st.get("workspace"), adir.name).get("purpose")
-                        or effective_summary(adir, cache).get("purpose") or "")[:200],
-        } for st, adir in rows],
+        "projects": [
+            {
+                "name": nm(st, adir),
+                "dir": st.get("dir"), "type": st.get("type"),
+                "language": effective_summary(adir, cache).get("language") or st.get("language"),
+                "first_dev": day(st.get("first_ts")), "last_dev": day(st.get("last_ts")),
+                "archived_at": day(st.get("last_archived")),
+                "sessions": st.get("sessions", 0), "files": st.get("files", 0),
+                "status": st.get("status"), "workspace": st.get("workspace"),
+                "purpose": (pick_override(ov or {}, st.get("workspace"), adir.name).get("purpose")
+                            or effective_summary(adir, cache).get("purpose") or "")[:200],
+            }
+            for st, adir in rows
+        ],
     }
+    # 管理字段只在有显式设置时写入，避免改变既有 index.json 结构
+    for st, adir in rows:
+        ov_one = pick_override(ov or {}, st.get("workspace"), adir.name)
+        item = next((x for x in data["projects"] if x.get("dir") == st.get("dir")), None)
+        if not item:
+            continue
+        if ov_one.get("pinned"):
+            item["pinned"] = True
+        if ov_one.get("watching") is False:
+            item["watching"] = False
+        if ov_one.get("note"):
+            item["note"] = ov_one["note"][:200]
     atomic_write(target / INDEX_JSON, json.dumps(data, ensure_ascii=False, indent=2))
 
 
@@ -2984,7 +3028,12 @@ def cmd_find(target: Path, query: str, as_json: bool = False,
 
     need = set(toks)
     hits = []
+    hidden_count = 0
     for p in data.get("projects") or []:
+        # 管理界面「取消关注」的项目默认不出现在检索结果里；--all 可包含
+        if p.get("watching") is False and not show_all:
+            hidden_count += 1
+            continue
         adir = target / (p.get("dir") or "")
         covered = set()
         score = 0
@@ -3060,6 +3109,8 @@ def cmd_find(target: Path, query: str, as_json: bool = False,
     print()
     if not hits:
         print(f"没有命中「{query}」")
+        if hidden_count:
+            print(f"  另有 {hidden_count} 个已取消关注的项目被跳过，加 --all 可一并检索")
         print("  换个更短的词试试；或先确认归档里有这个项目（archiver.py status）")
         return 1
 

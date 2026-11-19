@@ -213,6 +213,11 @@ class ManageStore:
         if applied:
             ent["updated_at"] = _now()
             self._save_overrides()
+            if "title" in applied:
+                st = self.state.data["projects"].get(key)
+                if st:
+                    st["name"] = applied["title"]
+                    st["name_source"] = "manual"
             self._rebuild_index()
             self._audit("管理", f"{key}：{', '.join(f'{k}={v}' for k, v in applied.items())}")
         return self.detail(key)
@@ -224,42 +229,66 @@ class ManageStore:
         return self.set_fields(key, {"pinned": bool(pinned)})
 
     def rename(self, key: str, new_title: str) -> dict:
-        """改显示名并同步重命名归档目录；带备份与整体回滚"""
+        """只改显示名（override.title），目录名保持不变。
+
+        下一次 render 会以 override.title 渲染 README/索引，因此立即生效；
+        name_source=manual 同时阻止 LLM 摘要把显示名改回去。
+        """
         st = self.state.data["projects"].get(key)
         if not st:
             raise ManageError("项目不存在或已被清理")
         new_name = A.safe_name(new_title or "")
         if not new_name or new_name in ("未命名项目",):
             raise ManageError("项目名不能为空或无效")
+        old_name = st.get("name") or ""
+        ent = self._ov_entry(key)
+        backup = backup_state(self.target)
+        try:
+            ent["title"] = new_name
+            ent["updated_at"] = _now()
+            self._save_overrides()
+            st["name"] = new_name
+            st["name_source"] = "manual"
+            self._rebuild_index()
+            self._audit("改名", f"{old_name} → {new_name}（仅显示名，目录不变）")
+        except Exception as e:
+            restore_backup(self.target, backup)
+            self.state = A.State(self.target)
+            self.overrides = A.load_overrides(self.target)
+            self.raw_overrides = _load_json(self.target / "overrides.json", {})
+            raise ManageError(f"改名失败，已回滚：{e}")
+        return self.detail(key)
+
+    def rename_dir(self, key: str, new_dirname: str) -> dict:
+        """独立入口：只改归档目录名（显示名不受影响），带备份与整体回滚。"""
+        st = self.state.data["projects"].get(key)
+        if not st:
+            raise ManageError("项目不存在或已被清理")
+        raw = (new_dirname or "").strip()
+        if not raw or raw in (".", ".."):
+            raise ManageError("目录名不能为空或无效")
+        cand = A.safe_name(raw, maxlen=60)
+        if cand != raw:
+            raise ManageError("目录名含非法字符（\\ / : * ? \" < > |）")
         old_dir = st.get("dir") or ""
         old_adir = self.target / old_dir
         if not old_adir.exists():
             raise ManageError("归档目录不存在，可能已被清理")
-        prefix = A.day(st.get("first_ts")) or "0000-00-00"
-        base = f"{prefix}_{new_name}"
-        cand, n = base, 2
-        while (self.target / cand).exists() and (self.target / cand) != old_adir:
-            cand = f"{base}-{n}"
-            n += 1
         new_adir = self.target / cand
+        if new_adir.exists() and new_adir != old_adir:
+            raise ManageError("目标目录已存在，请换一个名字")
+        if cand == old_dir:
+            return self.detail(key)
 
         backup = backup_state(self.target)
-        old_state = json.loads(json.dumps(st))  # 深拷贝
-        old_ent = dict(self._ov_entry(key))
         try:
             os.rename(str(old_adir), str(new_adir))
             st["dir"] = cand
-            st["name"] = new_name
             st["renamed_from"] = old_dir
-            st["name_source"] = "manual"
-            ent = self._ov_entry(key)
-            ent["title"] = new_name
-            ent["updated_at"] = _now()
-            self._save_overrides()
+            self._save_overrides()  # 键按 workspace，不含目录名，无需改写
             self._rebuild_index()
-            self._audit("改名", f"{old_dir} → {cand}（人工）")
+            self._audit("目录改名", f"{old_dir} → {cand}（显示名不变）")
         except Exception as e:
-            # 整体回滚：目录、state、overrides、index 一起恢复
             if new_adir.exists() and not old_adir.exists():
                 try:
                     os.rename(str(new_adir), str(old_adir))
@@ -269,7 +298,7 @@ class ManageStore:
             self.state = A.State(self.target)
             self.overrides = A.load_overrides(self.target)
             self.raw_overrides = _load_json(self.target / "overrides.json", {})
-            raise ManageError(f"改名失败，已回滚：{e}")
+            raise ManageError(f"目录改名失败，已回滚：{e}")
         return self.detail(key)
 
     def delete(self, key: str, purge: bool = False) -> dict:
