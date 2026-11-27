@@ -23,6 +23,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / "scripts"))
 
 import archiver  # noqa: E402
+from english_overlay import to_english  # noqa: E402  英文化仅作用于 demo HTML
 
 # 30 天，从 2026-10-20 到 2026-11-18。数字是编的，形状是真实的：
 # 有连休、有周末低谷、有两三个明显的加班日、有两天完全空白。
@@ -99,7 +100,7 @@ def build() -> dict:
 def main() -> int:
     d = build()
     path = HERE / "report-demo.html"
-    path.write_text(archiver.build_report_html(d), encoding="utf-8", newline="\n")
+    path.write_text(to_english(archiver.build_report_html(d)), encoding="utf-8", newline="\n")
     print(f"已写入 {path}")
     print(f"  {d['days']} 天 · {d['totals']['projects']} 个项目 · "
           f"{d['totals']['prompts']} 条对话 · {d['totals']['files']} 个改动文件")

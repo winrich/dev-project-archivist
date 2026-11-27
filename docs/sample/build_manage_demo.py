@@ -22,6 +22,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 SCRIPTS = HERE.parents[1] / "scripts"
 
+from english_overlay import to_english  # noqa: E402  英文化仅作用于 demo HTML
+
 # 虚构项目：名字、类型、语言、活跃分、等级、会话/文件、体积、起止日、近14天会话数
 # 数字是编的，形状是真实的：有高热、活跃、平稳、沉寂四档，有外链标记，有置顶。
 _PROJECTS = [
@@ -199,7 +201,7 @@ def build(view: str = "projects") -> str:
     idx = html.find(marker)
     if idx < 0:
         raise RuntimeError("manage_web.html 结构变化：找不到 <style> 注入点")
-    return html[:idx] + inject + html[idx:]
+    return to_english(html[:idx] + inject + html[idx:])
 
 
 def main() -> int:
