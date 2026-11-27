@@ -20,7 +20,7 @@ python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py find 你记
 
 - **不要贴真实会话原文**，里面可能有你的项目路径和指令内容。贴问题时只贴 `scan --dry-run` 的分类表。
 - **不要贴带用户名的绝对路径**。用虚构名或占位符代替。
-- **安全漏洞不要发在这里**，走 [SECURITY.md](../../SECURITY.md) 里的私有报告入口。
+- **安全漏洞不要发在这里**，走 [SECURITY.md](../../SECURITY.zh.md) 里的私有报告入口。
 
 ## 欢迎这几类帖子
 
@@ -33,8 +33,8 @@ python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py find 你记
 
 ## 从哪里开始
 
-- [README](../../README.md)：安装、命令、常见问题
-- [DEVELOPMENT.md](../../DEVELOPMENT.md)：架构与命令实现语义
-- [CONTRIBUTING.md](../../CONTRIBUTING.md)：怎么提 PR、公开内容三条红线
+- [README](../../README.zh.md)：安装、命令、常见问题
+- [DEVELOPMENT.md](../../DEVELOPMENT.zh.md)：架构与命令实现语义
+- [CONTRIBUTING.md](../../CONTRIBUTING.zh.md)：怎么提 PR、公开内容三条红线
 
 维护者会尽量回复，但新问题请优先开 Issue（有模板），方便跟踪和回退。

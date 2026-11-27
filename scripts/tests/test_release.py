@@ -80,7 +80,7 @@ class TestReadmeSamples(unittest.TestCase):
     def test_stage_numbering_matches_code(self):
         real = self._code_stages()
         self.assertTrue(real, "archiver.py 里找不到阶段编号（改了日志格式？）")
-        for name in ("README.md", "README.en.md"):
+        for name in ("README.md", "README.zh.md"):
             doc = (ROOT / name).read_text(encoding="utf-8")
             shown = set(self.STAGE.findall(doc))
             self.assertTrue(shown, f"{name} 里找不到阶段示例")

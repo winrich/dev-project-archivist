@@ -33,8 +33,8 @@ Check the classification table first, then decide whether to actually write to d
 
 ## Where to start
 
-- [README](../../README.en.md): installation, commands, FAQ
-- [DEVELOPMENT.md](../../DEVELOPMENT.en.md): architecture and command semantics
-- [CONTRIBUTING.md](../../CONTRIBUTING.en.md): how to open a PR and the three public-content red lines
+- [README](../../README.md): installation, commands, FAQ
+- [DEVELOPMENT.md](../../DEVELOPMENT.md): architecture and command semantics
+- [CONTRIBUTING.md](../../CONTRIBUTING.md): how to open a PR and the three public-content red lines
 
 Maintainers will try to reply, but for new issues please open a tracked Issue (templates available) so it can be followed and reverted cleanly.

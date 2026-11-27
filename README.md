@@ -1,10 +1,10 @@
-# 🗂️ 对话项目归档器 · 把 AI 对话里的软件收拢成可继续开发的源码档案
+# 🗂️ Conversation Project Archivist · Turn AI chat software into a source archive you can keep building
 
-[中文](https://github.com/winrich/dev-project-archivist/blob/main/README.md) · [English](https://github.com/winrich/dev-project-archivist/blob/main/README.en.md)
+[English](https://github.com/winrich/dev-project-archivist/blob/main/README.md) · [简体中文](https://github.com/winrich/dev-project-archivist/blob/main/README.zh.md)
 
-**读本机会话 → 识别项目 → 归档纯源码 → 一键跳回原对话。**
+**Read local sessions → identify projects → archive clean source → jump back to the conversation.**
 
-> 对话里做出来的软件，三个月后连自己都找不到源码在哪——这个工具负责把它们收回来。
+> Software built through chat becomes unfindable within three months. This tool goes and gets it back.
 
 <p align="center">
   <a href="https://github.com/winrich/dev-project-archivist/releases"><img src="https://img.shields.io/github/v/release/winrich/dev-project-archivist?color=blueviolet" alt="Release"></a>
@@ -27,64 +27,66 @@
 
 <table align="center">
   <tr>
-    <td align="center"><b>📦 27 个项目</b><br/><sub>单机实测归档规模</sub></td>
-    <td align="center"><b>📉 91 → 49 MB</b><br/><sub>只留源码后的体积</sub></td>
-    <td align="center"><b>⚡ 0 依赖</b><br/><sub>纯 Python 标准库</sub></td>
-    <td align="center"><b>🔗 一键回原对话</b><br/><sub>随时接着往下做</sub></td>
+    <td align="center"><b>📦 27 projects</b><br/><sub>archived on one real machine</sub></td>
+    <td align="center"><b>📉 91 → 49 MB</b><br/><sub>after keeping source only</sub></td>
+    <td align="center"><b>⚡ 0 dependencies</b><br/><sub>pure Python standard library</sub></td>
+    <td align="center"><b>🔗 Back to the chat</b><br/><sub>pick up where you left off</sub></td>
   </tr>
 </table>
 
-> ⭐ **如果这个工具帮你找回了几个以为已经丢失的项目，请给个 Star。**
+> ⭐ **If this tool recovered a few projects you thought you had lost, a star is appreciated.**
 
 ---
 
-## 🤔 你是不是也这样
+## 🤔 Does this sound familiar
 
-AI 让写软件变简单了，但**做出来的东西散在对话里**，于是新的麻烦来了：
+AI made writing software easy, but **the output is scattered across conversations**, which created a new set of problems:
 
-- 😫 半年前用对话做的小工具，现在连源码落在哪个窗口都找不到
-- 😫 项目散在几十个会话里，逐个复制粘贴永远做不完
-- 😫 想接着改，却想不起当时为什么这么设计、踩过哪些坑
-- 😫 想全量备份吧，`node_modules`、截图、构建产物占了九成体积
-- 😫 终于收拢了源码，换台机器或交给别人，工程就跑不起来了
-- 😫 归档目录越滚越大，`git clone` 一次要等好几分钟
+- 😫 A small tool you built six months ago — you cannot even find which window holds the source
+- 😫 Projects spread over dozens of sessions; copying them by hand never ends
+- 😫 You want to change something, but cannot recall why it was designed this way
+- 😫 A full backup would work, except `node_modules`, screenshots and build output are 90% of it
+- 😫 You finally collected the source, then it breaks on another machine or in someone else's hands
+- 😫 The archive keeps growing and a fresh `git clone` takes minutes
 
-**这个工具把这件事做成一条流水线**：扫描会话 → 判定项目 → 提取源码 → 渲染文档 → 增量同步。跑完打开 `INDEX.md`，每个项目都是能独立 `git clone` 继续开发的仓库。
+**This tool turns that into a pipeline**: scan sessions → classify projects → extract source → render docs → sync incrementally. Open `INDEX.md` when it finishes, and every project is a repository you can `git clone` and keep developing.
 
 ---
 
-## 🗺️ 它和别的做法有什么不同
+## 🗺️ How it differs from the alternatives
 
-| 做法 | 你拿到什么 | 代价 |
+| Approach | What you get | What it costs |
 |---|---|---|
-| 手动复制粘贴 | 只有你想得起来的那几个 | 耗时，且漏掉的永远漏掉 |
-| 整目录打包备份 | 源码连同依赖、截图、构建产物 | 几十 GB，clone 不动，交不了人 |
-| 把会话全喂给大模型 | 一段读起来不错的描述 | 没有源码，费用高，隐私还得赌 |
-| **本工具** | 纯源码 + 项目背景 + 分模块功能 + 技术实现 + 回原对话入口 | 一条命令，零依赖 |
+| Copy and paste by hand | Only the projects you remember | Slow, and whatever you missed stays lost |
+| Back up whole directories | Source plus dependencies, screenshots, build output | Tens of GB, uncloneable, untransferable |
+| Feed every session to an LLM | A nicely written description | No source code, high cost, privacy gamble |
+| **This tool** | Clean source + background + per-module features + implementation notes + links back to the chat | One command, zero dependencies |
 
 ---
 
-## 🎯 先确认：你要的是工具，还是某个项目
+## 🎯 First, decide: do you need this tool, or a specific project?
 
-| 你的目的 | 应该怎么做 |
+| Your goal | What to do |
 |---|---|
-| 我自己也在用 AI 编程工具，想把**我自己的**对话项目收拢 | 装本工具（继续往下读） |
-| 我只想接手别人做好的某个项目继续开发 | **不要装工具**，直接拿那个项目目录（含 `source/`、`.git/`、`README.md`），`git clone` 或解压即可开工 |
-| 我想把自己的某个项目移交给别人 | 见 [DEVELOPMENT.md](DEVELOPMENT.md) 的「移交某个项目给他人」 |
+| I use AI coding agents too, and want to collect **my own** conversation projects | Install this tool (keep reading) |
+| I just want to take over someone's finished project and keep developing it | **Do not install.** Take that project folder (with `source/`, `.git/`, `README.md`) and `git clone` or unzip it |
+| I want to hand one of my own projects to someone else | See "Handing a project over" in [DEVELOPMENT.md](DEVELOPMENT.md) |
 
-本工具不含任何项目数据，它只负责把**本机会话**变成源码档案。别人的会话在别人机器上，装了也扫不到。
+This tool contains no project data. It only turns **local sessions** into a source archive. Other people's sessions live on their machines; installing it here finds nothing.
 
 ---
 
-## 🧠 30 秒看懂
+## 🧠 Understand it in 30 seconds
 
-命令分三组，别把频率搞混：**`scan` / `run` 一个月跑几次，`find` / `stats` / `report` / `restore` 天天用，`sync` 想起来才跑。**
+Commands come in three groups — don't mix up their frequency:
+**`scan` / `run` run a few times a month; `find` / `stats` / `report` / `restore` are daily; `sync` when you think of it.**
 
-每条命令后面都跟着它跑出来的样子。`…` 是省略的行，数字是虚构的，格式与对齐由真实打印代码生成。
+Every command below is followed by what it actually prints. `…` marks elided lines; numbers are invented; the columns
+are padded by the real print code. (CLI messages are in Chinese for now.)
 
-### 第一次：先看它怎么分类，再落盘
+### First time: check the classification, then write
 
-**① 只分类，不写任何文件**
+**1. Classify only — writes nothing**
 
 ```bash
 python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py scan --dry-run
@@ -107,9 +109,11 @@ python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py scan --dry-
 小计：代码项目 5 / 文档任务 2 / 混合产物 1 / 空壳 0
 ```
 
-一张表回答两个问题：扫到哪些项目、各自判成了什么（`码` = 源码文件数，`档` = 文档数）。**首次务必先跑它**——判定看的是工作区路径与文件构成，猜错的代价是归档里多出一堆垃圾目录。
+One table answers two questions: which project units were found, and what each was judged to be (`码` = source files,
+`档` = documents). **Run it first** — the judgement looks at workspace paths and file layout, and a wrong call means
+junk directories in your archive.
 
-**② 分类对了，正式落盘**
+**2. Classification looks right? Archive for real**
 
 ```bash
 python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py run
@@ -126,21 +130,23 @@ python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py run
 [render] README 更新 4 个，索引项目 8 个
 ```
 
-`run` = 采集 + 渲染。`= 无变化` 是增量在生效（三级指纹没变就不重解析），`+` 是这次写了盘；括号里是源码份数、体积、剔除项。跑完打开归档目录的 `INDEX.md`，每个项目都在里面。
+`run` = collect + render. `= 无变化` means the fingerprint layer skipped it (nothing changed, so nothing was
+re-parsed); `+` means it was written this run, followed by copied files, size and exclusions. When it finishes, open
+`INDEX.md` in the archive — every project is in there.
 
-默认输出到 `~/Workbuddy项目归档`，改位置有两种方式：
+Output defaults to `~/Workbuddy项目归档`; change it in one of two ways:
 
 ```bash
-# 命令行指定
-python .../archiver.py run --target "D:\我的归档"
+# Per command
+python .../archiver.py run --target "D:\my-archive"
 
-# 或设环境变量（Windows，设一次，之后免传参）
-[Environment]::SetEnvironmentVariable("ARCHIVER_TARGET", "D:\我的归档", "User")
+# Or an environment variable (Windows: set once, no flags afterwards)
+[Environment]::SetEnvironmentVariable("ARCHIVER_TARGET", "D:\my-archive", "User")
 ```
 
-### 之后每天：四个只读命令
+### Then, every day: four read-only commands
 
-**找东西**
+**Find things**
 
 ```bash
 python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py find "批处理 PowerShell"
@@ -157,9 +163,10 @@ InvoiceParser  ·  2026-11-12 → 2026-11-15  ·  评分 24
   → 直接回场：archiver.py find "批处理 PowerShell" --open
 ```
 
-项目名、文件名、指令原文一起搜，多个词**全部命中**才计入；`--open` 直接打开第一条命中的原对话。只读，不写任何文件。
+Project names, file names and prompt text are searched together; with multiple words, **all must match**. `--open`
+jumps straight back into the top hit's original conversation. Read-only: no lock, no files written.
 
-**这周干了多少**
+**How much did this week cost you**
 
 ```bash
 python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py stats --days 7
@@ -192,9 +199,10 @@ python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py stats --day
   空白天    11-13（没有会话）
 ```
 
-不要求先跑过 `scan`——它只读本机已有的转录，新用户第一天就有数。成本那栏永远写「不估算」：模型归属常是 `auto`，拿默认单价顶替等于编数字。
+No `scan` required first — it reads transcripts already on disk, so day one has numbers. The cost line always reads
+"not estimated": the model field is often `auto`, and multiplying by a default price would be inventing data.
 
-**想给同事看，或者截图发人**
+**Something to show a colleague**
 
 ```bash
 python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py report --days 30 --open
@@ -206,9 +214,10 @@ python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py report --da
   报告不含工作区路径与指令原文，可直接分享
 ```
 
-单文件 HTML，双击就开，不发网络请求、不加载字体。页面本身长什么样，见下面「👀 长什么样」。
+One self-contained HTML file: double-click and it opens — no network requests, no web fonts. What the page itself
+looks like: see "👀 What it looks like" below.
 
-**回到上周三归档里的样子**
+**What the archive looked like last Wednesday**
 
 ```bash
 python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py restore --date 2026-11-14
@@ -238,13 +247,15 @@ python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py restore --d
     restore --date 2026-11-14 --write
 ```
 
-默认只预览：恢复动辄几百 MB，先看清「要拿回哪一版、多少文件」再决定。`--write` 展开到 `<归档目录>/_restore/2026-11-14/`，归档本身一个字节都不动；恢复不了的项目会单独列出来，并写明原因（仓库没提交 / 那天之前还没归档过）。
+Preview by default: a restore can be hundreds of MB, so look at "which version, how many files" before deciding.
+`--write` expands into `<archive>/_restore/2026-11-14/` and touches nothing in the archive itself. Projects that
+cannot be restored are listed separately with the reason (repo has no commits / nothing archived before that day).
 
-### 想起来才跑：把归档备到自己的仓库
+### When you remember to: back the archive up to your own repos
 
 ```bash
-python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py sync          # 预览
-python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py sync --push   # 真推
+python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py sync          # preview
+python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py sync --push   # really push
 ```
 
 ```text
@@ -266,94 +277,96 @@ python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py sync --push
   这是预览，没有提交也没有推送。加 --push 才执行。
 ```
 
-只推**自己配了远端**的仓库（不猜地址、不自动建远端）、**永不 force**、不进 `run`（定时任务不该依赖网络）。
+It only pushes repos **that already have a remote of their own** (no guessed URLs, no auto-created remotes), **never
+forces**, and is not part of `run` (a scheduled task should not depend on the network).
 
 ---
 
-## 👀 长什么样
+## 👀 What it looks like
 
-先看产物，再决定要不要往下读。`report` 生成的账本页长这样：
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/winrich/dev-project-archivist/main/docs/img/report-demo.png" alt="report 生成的单文件 HTML：四张总览卡、日历热力图、每日对话量、按对话量排序的项目卡" width="820">
-</p>
-
-一份自包含的 HTML：双击就开，不发网络请求、不加载字体，能直接发给别人。四张总览卡（对话 / 项目 / 改动文件 / token）、日历热力图、每日对话量柱状图、按对话量排的项目卡。
-
-**能分享，和敢分享，是两件事**：页面里没有工作区路径，没有指令原文，唯一的外链是页脚那几个字。
-
-> 这张图来自 [`docs/sample/report-demo.html`](docs/sample/report-demo.html)，由 [`docs/sample/build_sample.py`](docs/sample/build_sample.py)
-> 喂**虚构数据**给**同一个渲染函数**生成——项目名和数字都是编的，版式和你自己跑出来的那份一致。
-> 改了样式，样例跟着变，不会漂。
-
-其余命令的输出（分类表、命中列表、账本数字、恢复预览）都在上面「🧠 30 秒看懂」里——每条命令后面都跟着它跑出来的样子。
-
-如果你更愿意**在浏览器里管**，还有一套只监听本机的后台管理台。项目列表、活跃度、数据概览长这样：
+Look at the output first, decide later whether to read on. This is what the page `report` generates looks like:
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/winrich/dev-project-archivist/main/docs/img/manage-demo.png" alt="管理台项目管理：左侧树形菜单、类型/语言/日期筛选、活跃度分数与近14天迷你图、置顶/外链/取消关注标记、分页">
+  <img src="https://raw.githubusercontent.com/winrich/dev-project-archivist/main/docs/img/report-demo.png" alt="Single-file HTML report: four summary cards, calendar heatmap, daily bar chart, projects ranked by prompt count" width="820">
+</p>
+
+One self-contained HTML file: double-click and it opens — no network requests, no web fonts, safe to hand to someone else. Four summary cards (prompts / projects / changed files / tokens), a calendar heatmap, a daily bar chart, and projects ranked by prompt count.
+
+**Shareable and safe-to-share are two different things**: no workspace paths and no prompt text in the page — the only external link is a few words in the footer.
+
+> The image comes from [`docs/sample/report-demo.html`](docs/sample/report-demo.html), generated by
+> [`docs/sample/build_sample.py`](docs/sample/build_sample.py) — **invented data** fed to the **same renderer**
+> you run. Names and numbers are made up; the layout is exactly what you get. Change the styles and the sample
+> follows, so it never drifts.
+
+Terminal output for every command — classification table, search hits, ledger numbers, restore preview — is in
+"🧠 Understand it in 30 seconds" above, right under each command.
+
+If you would rather manage things in a browser, there is also a console that listens on localhost only. The project list and overview look like this:
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/winrich/dev-project-archivist/main/docs/img/manage-demo.png" alt="Console project list: tree menu, type/language/date filters, activity score and 14-day sparkline, pinned/external/unwatched markers, pagination">
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/winrich/dev-project-archivist/main/docs/img/manage-demo-overview.png" alt="管理台数据概览：六张统计卡、近14天活动量、按类型/活跃等级/语言分布、最近更新项目">
+  <img src="https://raw.githubusercontent.com/winrich/dev-project-archivist/main/docs/img/manage-demo-overview.png" alt="Console overview: six stat cards, 14-day activity, type/tier/language breakdowns, recently updated projects">
 </p>
 
-左侧树形菜单分四组（总览 / 管理 / 分析 / 系统）：数据概览、项目管理、活跃度排行、按日期报告、设置。列表支持类型 / 语言 / 日期筛选与分页，每行带一个 0–100 的活跃度分数和 14 天迷你图；置顶、外链、取消关注都有标记。功能细节见下面「🛠️ 管理台」。
+The tree menu has four groups (Overview / Manage / Analyse / System): overview, projects, activity ranking, date-based reports, and settings. See "🛠️ Management console" below for details.
 
-> 这两张图同样来自**虚构数据**：[`docs/sample/build_manage_demo.py`](docs/sample/build_manage_demo.py) 把一套编造的项目喂给**真实的后台页面**（只替换数据源、页面代码一行不改），
-> 再用无头浏览器截图。项目名和数字都是编的，版式与你本机跑出来的一致；改了后台样式，`python docs/sample/build_manage_demo.py` 重新生成即可，不会漂。
+> Both images use **invented data**: [`docs/sample/build_manage_demo.py`](docs/sample/build_manage_demo.py) feeds made-up projects to the **real console page** (only the data source is replaced — the page code is untouched), then a headless browser takes the shot. Change the styles and rerun the script to regenerate.
 
 ---
 
-## 🏗️ 工作流程
+## 🏗️ Pipeline
 
 ```mermaid
 flowchart LR
-  A["本机会话<br/>~/.workbuddy"] --> B["Adapter<br/>归一事件"] --> C["解析 · 判定"] --> D["提取源码<br/>剔噪声"] --> E["渲染 · 建仓"] --> G[("指纹库<br/>下次增量")]
+  A["Local sessions<br/>~/.workbuddy"] --> B["Adapter<br/>7 neutral events"] --> C["Parse · classify"] --> D["Extract source<br/>drop noise"] --> E["Render<br/>git init"] --> G[("Fingerprints<br/>next run")]
 ```
 
-「指纹库」记录工作区 / 文件 / 内容三级哈希，下次运行先比对再决定是否重新解析，这就是「稳定期不调模型」的原因。
+The fingerprint store keeps three-level hashes (workspace / file / content). The next run compares before parsing, which is why a steady-state run makes zero model calls.
 
-一句话版本：
+The one-liner:
 
 ```text
-归档 = 读会话 + 判项目 + 剔噪声 + 抽源码 + 写文档 + 建仓库 + 记指纹
+archive = read sessions + classify + drop noise + extract source + write docs + init repos + fingerprint
 ```
 
-真正干活的是**确定性解析**，模型只负责最后一步「把文件清单和需求演进写成一段人话」。这条分工决定了三件事：结果可复现、不依赖联网、费用可控。
+The real work is **deterministic parsing**. The model only handles the last step — turning a file listing and requirement history into readable prose. That division buys three things: reproducible output, no network dependency, and predictable cost.
 
 ---
 
-## 🤖 支持哪些 AI 工具
+## 🤖 Supported AI tools
 
-| 工具 | 会话数据位置 | 状态 |
+| Tool | Session data | Status |
 |---|---|---|
-| WorkBuddy | `~/.workbuddy/` | ✅ 开箱即用，含 `workbuddy://` 深链 |
-| Claude Code | `~/.claude/projects/` | ✅ 开箱即用，无深链时降级为 `claude --resume` 提示 |
-| 其他本地 Agent | 需自行适配 | 见 [DEVELOPMENT.md](DEVELOPMENT.md) |
+| WorkBuddy | `~/.workbuddy/` | ✅ Works out of the box, includes `workbuddy://` deep links |
+| Claude Code | `~/.claude/projects/` | ✅ Works out of the box, degrades to a `claude --resume` hint when no deep link exists |
+| Other local agents | Needs its own adapter | See [DEVELOPMENT.md](DEVELOPMENT.md) |
 
-用 `--source` 选择来源：默认 `all` 自动探测本机装了哪些，也可写 `workbuddy`、`claude-code` 或逗号组合。本机没有某个工具的数据时自动跳过，不会报错。
+Use `--source` to pick the source. The default `all` auto-detects what is installed; you can also pass `workbuddy`, `claude-code`, or a comma-separated combination. A tool with no local data is skipped silently instead of failing.
 
-**为什么网页版 ChatGPT / Claude 不行**：它们把对话存在云端，代码从未以文件形式落到你的机器上，归档器拿不到「完整源码」这个最核心的交付物。本工具面向的是**能在本机写文件**的 Agent 类工具。
+**Why web-based ChatGPT / Claude is not supported**: those services keep conversations in the cloud, so the code never lands on your disk as files. The archivist cannot obtain its single most important deliverable — the complete source. This tool targets **agent-style tools that write files locally**.
 
-接入新平台的开发约定见 [DEVELOPMENT.md](DEVELOPMENT.md)。
+Platform-adapter internals are in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ---
 
-## 🚀 快速开始
+## 🚀 Quick start
 
-### 0. 环境要求
+### 0. Requirements
 
-| 项目 | 要求 |
+| Item | Requirement |
 |---|---|
-| 操作系统 | Windows / macOS / Linux |
-| Python | 3.8 及以上（**无需 pip install**，只用标准库） |
-| AI 工具 | 至少一个受支持工具的本地会话数据，见上节 |
-| git | 可选。装了才能给每个项目初始化独立仓库；没装只有该步骤跳过，其余功能正常 |
+| OS | Windows / macOS / Linux |
+| Python | 3.8+ (**no pip install needed**, standard library only) |
+| AI tool | Local session data from at least one supported tool, see above |
+| git | Optional. Needed to give each project its own repository; without it that step is skipped and everything else still works |
 
-### 1. 安装
+### 1. Install
 
-**方式一：git clone（推荐，便于日后更新）**
+**Option 1: git clone (recommended, easy to update later)**
 
 ```bash
 # WorkBuddy
@@ -363,233 +376,229 @@ git clone https://github.com/winrich/dev-project-archivist.git ~/.workbuddy/skil
 git clone https://github.com/winrich/dev-project-archivist.git ~/.claude/skills/dev-project-archivist
 ```
 
-**方式二：压缩包**
+**Option 2: zip archive**
 
-解压后把整个 `dev-project-archivist` 目录放进对应工具的 skills 目录，确认最终路径为：
+Unzip and place the whole `dev-project-archivist` folder into the skills directory of the target tool, so the final path is:
 
 ```
 ~/.workbuddy/skills/dev-project-archivist/SKILL.md     # WorkBuddy
 ~/.claude/skills/dev-project-archivist/SKILL.md        # Claude Code
 ```
 
-装完**重启对应工具**，技能列表里才会出现。不装成技能也完全能用——直接跑命令行即可，归档逻辑不依赖宿主工具。
+**Restart the tool** after installing for it to appear in the skill list. You can also skip the skill entirely and run the CLI — the archiving logic does not depend on any host tool.
 
-### 2. 跑起来
+### 2. Run it
 
 ```bash
-python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py scan --dry-run   # 只看分类
-python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py run              # 正式归档
+python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py scan --dry-run   # classification only
+python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py run              # archive for real
 ```
 
-> 命令以 WorkBuddy 的安装路径为例。装在 Claude Code 下的，把 `~/.workbuddy/skills/` 换成 `~/.claude/skills/` 即可。
+> Commands assume the WorkBuddy install path. If installed under Claude Code, replace `~/.workbuddy/skills/` with `~/.claude/skills/`.
 
-### 3. 在对话里用
+### 3. Use it in a conversation
 
-重启后可直接对 AI 助手说：
+After restarting, simply tell the assistant:
 
-> 把我在各个对话里开发的项目归档一下
+> Archive the projects I built across my conversations.
 
-技能会被自动唤起并执行同一套流程。
+The skill is picked up automatically and runs the same pipeline.
 
 ---
 
-## 🆓 不配大模型也能用（零成本模式）
+## 🆓 Zero-cost mode (no LLM required)
 
-**「大模型归纳」是可选的。** 跳过它，归档同样完整，只是 README 里的项目名称沿用目录名、功能说明由文件清单自动推导：
+**LLM summarisation is optional.** Skip it and the archive is still complete — project names fall back to folder names, and feature notes are derived from the file listing:
 
 ```bash
 python .../archiver.py run
 ```
 
-`run` 不包含归纳步骤，渲染时自动走**模板兜底**（`derive_from_manifest`）。适合三类情况：不想配 API Key、不想产生任何模型费用；只想先把源码收拢好，说明文字日后再说；在他人机器上临时用一次。
+`run` does not include summarisation; rendering automatically uses the **template fallback** (`derive_from_manifest`). It suits three cases: you do not want an API key or any token cost; you just want the source collected now and the prose later; a one-off run on someone else's machine.
 
-**后续想升级成模型归纳**很简单：对某个项目补写 `_summary.json` 后重跑 `render` 即可，无需重新扫描。反之，删掉 `_summary.json` 再 `render` 会退回模板输出。
+**Upgrading to LLM summaries later is easy**: write `_summary.json` for a project and re-run `render` — no re-scan needed. Conversely, delete `_summary.json` and re-render to fall back to the template.
 
-> 没有 `--no-llm` 之类的开关。是否调用模型，取决于你有没有执行归纳这一步。
+> There is no `--no-llm` switch. Whether a model is called depends purely on whether you ran the summarisation step.
 
-**什么时候值得用模型归纳**：项目多、需要可读的项目名和成体系的功能说明时。夜间定时任务只对「有变化」的项目归纳，稳定期模型调用为 0。
+**When is a model worth it**: when you have many projects and want readable names plus coherent feature descriptions. A nightly job only summarises projects that changed, so in steady state the model call count is 0.
 
 ---
 
-## 🔗 回原对话继续开发
+## 🔗 Going back to the original conversation
 
-跳转方式按会话来源分派，没有深链能力的工具不会硬凑出点不开的链接。
+The jump mechanism depends on the session's source; tools without deep-link support never get a broken link forced onto them.
 
-| 平台 | 打开方式 |
+| Platform | How to open |
 |---|---|
-| WorkBuddy | 点 README 里的「打开对话」，或运行项目根目录的 `open-session.bat`（macOS `.command` / Linux `.sh`） |
-| Claude Code | 项目根目录的 `open-session.md` 里记着会话 ID 与 `claude --resume <ID>` 命令 |
+| WorkBuddy | Click "打开对话" in the README, or run `open-session.bat` in the project root (`.command` on macOS, `.sh` on Linux) |
+| Claude Code | `open-session.md` in the project root records the session ID and a `claude --resume <ID>` command |
 
-无论哪个平台，每个项目都有一份 `_meta/conversations.md`，按时间排列该项目**全部用户指令原文**，不跳转也能看清需求演进。
+Regardless of platform, every project has `_meta/conversations.md` — all user instructions for that project in chronological order, so you can see the requirement evolution without jumping anywhere.
 
 ---
 
-## 🛠️ 管理台：维护已监测的项目列表
+## 🛠️ Management console: maintain the watched-project list
 
-不想手改 `overrides.json`，可以起一个**只监听本机**的浏览器管理台：
+If you would rather not edit `overrides.json` by hand, start a browser console that listens on **localhost only**:
 
 ```bash
-python scripts/archiver.py manage --target "<归档目录>" --port 8765
+python scripts/archiver.py manage --target "<archive dir>" --port 8765
 ```
 
-- `--port` 可改端口；`--port 0` 让系统自动分配空闲端口（终端会打印实际地址）。
-- 首次启动会随机生成口令并**只打印一次**；也可先设 `ARCHIVER_MANAGE_PASSWORD` 用自己的口令。口令以 PBKDF2 哈希存在 `manage.auth.json`，明文不落盘。
-- 服务只绑 `127.0.0.1`，不提供远程访问；会话 Cookie 为 HttpOnly + SameSite=Strict，写操作有 CSRF 校验，连续 5 次口令错误锁定 60 秒。
+- `--port` changes the port; `--port 0` asks the OS for a free one (the terminal prints the actual URL).
+- On first launch a random password is generated and printed **once**; set `ARCHIVER_MANAGE_PASSWORD` beforehand to use your own. The password is stored as a PBKDF2 hash in `manage.auth.json` — never in plaintext.
+- The server binds only `127.0.0.1`. Cookies are HttpOnly + SameSite=Strict, writes require a CSRF token, and five failed logins lock the client for 60 seconds.
 
-| 操作 | 行为 | 安全性 |
+| Action | Behaviour | Safety |
 |---|---|---|
-| **改名** | 只改显示名（写 `overrides.json` 的 `title`），**目录名不变** | 下次 `render` 不会把人工名改回去 |
-| **改目录名** | 独立入口，只改归档目录名，显示名不变 | 校验非法字符与重名，自动备份，冲突可回滚 |
-| **取消关注** | 从默认列表与 `find` 中隐藏，**源码与账本完整保留** | 点「全部」可查看并恢复关注 |
-| **置顶** | 索引与管理列表置顶 | 稳定排序，不影响历史账本 |
-| **查看详情** | 聚合用途、技术、会话、文件、原对话入口与人工备注 | 只读 |
-| **删除** | 停止归档（`skip=true`）并把目录移入 `_trash/` | 软删除，可手工找回 |
+| **Rename** | Changes the display name only (`title` in `overrides.json`); **the directory name is untouched** | Manual names survive later `render` runs |
+| **Rename directory** | Separate action; changes the directory only, display name unchanged | Rejects illegal characters and collisions, auto-backup, rollback on failure |
+| **Unwatch** | Hides the project from the default list and `find`; **source and ledger stay intact** | Switch to "All" to see and restore it |
+| **Pin** | Moves the project to the top of the index and console | Stable sort; history ledger unaffected |
+| **Details** | Aggregates purpose, tech, sessions, files, original-chat links and a manual note | Read-only |
+| **Delete** | Stops archiving (`skip=true`) and moves the directory into `_trash/` | Soft delete, recoverable by hand |
 
-管理台与定时任务共用同一把文件锁；所有改动写入 `CHANGELOG.md` 留痕。
+The console shares the same file lock as scheduled runs, and every change is recorded in `CHANGELOG.md`.
 
-左侧树形菜单把它分成四组，除了上表的维护操作，还有这些**只看不写**的分析视图：
+The tree menu adds three read-only analysis views on top of the maintenance actions above:
 
-| 视图 | 能力 |
+| View | What it does |
 |---|---|
-| **数据概览** | 六张统计卡（监测项目 / 关注中 / 已归档仓库 / 源码文件 / 源码体积 / 活跃项目）+ 近 14 天活动量 + 按类型、活跃等级、语言的分布条 + 最近更新项目 |
-| **活跃度排行** | 按活跃分从高到低列出关注中项目，带等级与 14 天迷你图 |
-| **按日期报告** | 历史 `report` 按日归档入库，可按日期检索命中哪几份报告、点开看原 HTML 报告详情；也能现场生成一份新报告 |
-| **设置** | 自助修改管理口令（PBKDF2 重新哈希，明文不落盘） |
+| **Overview** | Six stat cards (watched / active / archived repos / source files / source size / active projects) + 14-day activity + type, tier and language breakdowns + recently updated projects |
+| **Activity ranking** | Watched projects sorted by activity score, with tier and a 14-day sparkline |
+| **Date-based reports** | Past `report` output is archived into a database; search by date to see which reports hit, and open the original HTML. You can also generate a fresh report here |
+| **Settings** | Change the console password (PBKDF2 re-hash, never stored in plaintext) |
 
-项目管理页本身也有增强：类型 / 语言 / 日期**筛选**，可调每页条数与**翻页**，每行显示**活跃度分数 + 14 天迷你图**。活跃度是四维加权：`0.4×近期性 + 0.3×频次 + 0.2×产出 + 0.1×持续度`——近期性按半衰期衰减，频次 / 产出取对数压缩避免头部碾压，持续度来自会话明细的不同日期数。外链项目（源码在工作区外、未复制进归档）会打「外链」标记，详情里列出实际写入的工程目录。
+The project list also has type / language / date **filters**, configurable page size and **pagination**, and a 0–100 activity score with a 14-day sparkline on every row. The score is a four-factor weighted sum: `0.4×recency + 0.3×frequency + 0.2×output + 0.1×consistency` — recency decays by half-life, frequency and output are log-compressed to avoid head dominance, and consistency counts distinct session dates. Projects whose source lives outside the workspace are marked **external**, with the actual written directories listed in Details.
 
-> ⚠️ 改目录名会改变归档路径，历史链接可能失效，请谨慎。若只想修正名字，用「改名」即可。
+> ⚠️ Renaming a directory changes the archive path and may break old links. To fix a name, use **Rename** instead.
 
 ---
 
-## 📚 命令一览
+## 📚 Command reference
 
-常用的七个命令连同它们的输出在上面「🧠 30 秒看懂」里；这里是完整参数。
+The seven commands you actually use, with their output, are in "🧠 Understand it in 30 seconds" above; this is the
+full flag list.
 
-| 命令 | 作用 |
+| Command | What it does |
 |---|---|
-| `scan` | 采集/提取/复制源码，写证据包与待归纳清单 |
-| `scan --dry-run` | 只打印分类表，零写入（**首次校准必用**） |
-| `scan --dry-run --all` | 连空壳会话一起列出（默认折叠，只报计数） |
-| `scan --explain [关键字]` | 打印判定依据：凭什么算代码项目、名字取自哪个证据（零写入） |
-| `scan --force` | 忽略指纹强制重扫（换机、改规则后用） |
-| `scan --only 关键字` | 只处理名称/路径/会话标题/归档目录名命中的项目 |
-| `scan --limit N` | 只处理最近 N 个项目 |
-| `render` | 由摘要生成 README 与总索引（幂等，可反复跑） |
+| `scan` | Collect / extract / copy source, write the evidence pack and the pending-summarisation list |
+| `scan --dry-run` | Print the classification table only, zero writes (**use first to calibrate**) |
+| `scan --dry-run --all` | Also list empty-shell sessions (collapsed by default) |
+| `scan --explain [KEYWORD]` | Print why a project was classified this way and where its name came from (read-only) |
+| `scan --force` | Ignore fingerprints and rescan (after switching machines or changing rules) |
+| `scan --only KEYWORD` | Only process projects matching the keyword in name / path / session title / archive dir |
+| `scan --limit N` | Only process the N most recent projects |
+| `render` | Generate READMEs and the master index from summaries (idempotent) |
 | `run` | scan + render |
-| `--source all\|workbuddy\|claude-code` | 选择数据来源，默认 `all` 自动探测；可逗号组合 |
-| `pending` | 列出证据有变化、需要重新归纳的项目路径 |
-| `status` | 上次运行时间、失联项目、缺摘要项目、`.git` 体积体检 |
-| `git-clean` | 重建本工具创建的仓库，清掉历史提交里的大对象 |
-| `sync` | **看归档仓库的同步状态**：远端/待提交/待推送（只读） |
-| `sync --push` | 提交未提交的改动并推到各仓库自己配的远端（未配远端的不推，永不 force） |
-| `sync --only 关键字` | 只处理名字含该关键字的仓库；`--json` 输出机器可读结果 |
-| `daylog --date 2026-11-18` | **零写入预览**：按天汇总开发活动（指令/写入/时长），并体检数据完整性 |
-| `daylog --date 2026-11-18 --json` | 同上，输出 JSON 供脚本或大模型消费 |
-| `daylog --date 2026-11-18 --merge-external` | 把工作区外的写入按仓库提升为独立行（默认只在体检里计数） |
-| `log --date 2026-11-18` | **写出清点稿** `logs/2026-11-18.md`：确定性输出、幂等、已脱敏 |
-| `find 关键词` | **跨项目检索**：名字/文件名/指令原文，多个词全部命中才计入（只读） |
-| `find 关键词 --open` | 命中后直接打开第一条的原对话 |
-| `find 关键词 --json` | 输出 JSON，供脚本或大模型消费 |
-| `manage --port 8765` | 启动本地浏览器管理台；`--port 0` 自动选端口，仅绑 127.0.0.1 |
-| `stats` | **跨天账本**：最近 7 天的对话/项目/文件/token，含每日柱状（只读） |
-| `stats --days 30` | 回溯 30 天；配合 `--date` 指定截止日 |
-| `stats --days 30 --json` | 输出 JSON，供脚本或大模型消费 |
-| `report` | **写一份单文件 HTML 账本**（默认最近 30 天，可截图、可直接发人） |
-| `report --days 7 --open` | 生成立即用浏览器打开 |
-| `report --out 目录` | 指定输出目录，默认 `<target>/report` |
-| `restore` | 列出**能回到哪些天**（各归档仓库有提交的日子） |
-| `restore --date 2026-11-14` | **预览**那天结束时的快照：项目/文件/体积，零写入 |
-| `restore --date 2026-11-14 --write` | 展开成副本到 `<target>/_restore/2026-11-14/`，**不覆盖归档** |
-| `restore --date 2026-11-14 --write --only 关键字` | 只恢复名称匹配的项目 |
-| `restore --date 2026-11-14 --json` | 输出 JSON，供脚本或大模型消费 |
-
-## 🌙 每日自动同步（可选）
-在你的 AI 工具里建一个定时任务（WorkBuddy 的自动化、系统计划任务均可），提示词分三步：`scan` → 读 `pending` 逐个归纳 → `render`。完整可粘贴的提示词见 [`references/automation-prompt.md`](references/automation-prompt.md)。
-
-关键点：
-
-- 只有**指纹变化**的项目才进 `pending`，稳定的日子里模型调用为 0
-- 建议排在凌晨低峰，并绑到低价模型
-- **定时任务里必须显式写 `--target`**，不要依赖环境变量
+| `--source all\|workbuddy\|claude-code` | Choose data source(s). Default `all` auto-detects; comma-separated allowed |
+| `pending` | List projects whose evidence changed and need re-summarising |
+| `status` | Last run time, lost projects, projects missing summaries, `.git` size check |
+| `git-clean` | Rebuild the repositories this tool created, purging large objects from history |
+| `sync` | **Inspect repo sync state**: remote / uncommitted / unpushed. Read-only |
+| `sync --push` | Commit pending changes and push to each repo's own remote (no remote = skip, never force) |
+| `sync --only KEYWORD` | Limit to repos whose name matches; `--json` for machine-readable output |
+| `find KEYWORD` | **Cross-project search**: names / file names / prompt text. All words must match. Read-only |
+| `find KEYWORD --open` | Open the original conversation of the top hit |
+| `find KEYWORD --json` | Machine-readable output (score + snippets) |
+| `manage --port 8765` | Start the local browser console; `--port 0` picks a free port, binds 127.0.0.1 only |
+| `stats --days 7` | **Cross-day ledger**: prompts / projects / files / tokens for the last N days, plus a daily bar (read-only; `--date` sets the end date, `--json` for scripts) |
+| `report --days 30` | **Write a single-file HTML ledger**: heatmap + bar chart + project cards. No paths, no prompt text — safe to share (`--out` dir, `--open` to launch) |
+| `restore` | List **which days you can go back to** (days on which the archive repos have commits) |
+| `restore --date 2026-11-14` | **Preview** the snapshot as of that day's end: projects / files / size, zero writes |
+| `restore --date 2026-11-14 --write` | Expand a copy into `<target>/_restore/2026-11-14/` — **never overwrites the archive** |
+| `restore --date 2026-11-14 --write --only KEYWORD` | Restore only matching projects |
+| `restore --date 2026-11-14 --json` | Machine-readable output |
 
 ---
 
-## ❓ 常见问题
+## 🌙 Daily automation (optional)
 
-**扫不到任何项目**
-确认 `~/.workbuddy/projects/` 下有 `.jsonl` 转录文件。全新安装、从未对话过的环境里没有可归档内容。
+Create a scheduled task in your AI tool (WorkBuddy automation, system scheduler — any works) with a three-step prompt: `scan` → read `pending` and summarise each → `render`. A complete copy-pasteable prompt is in [`references/automation-prompt.md`](references/automation-prompt.md).
 
-**分类不准，把聊天当成了项目**
-先 `scan --dry-run` 看分类表。判定规则是「源码文件数 ≥ 5 且不低于文档数的 30%」。调整阈值用 `--min-code N`；永久排除某工作区，在 `overrides.json` 里给它 `skip: true`。
+Key points:
 
-**项目名或说明不对**
-在 `overrides.json` 里按工作区路径或归档目录名覆盖 `title` / `background` / `purpose`，重跑 `render` 生效。
-
-**核心脚本被误剔除了**
-本工具会剔除形如 `repro_*`、`check_*`、`*_bak` 的一次性脚本。若误伤，在 `overrides.json` 加 `{"keep_scripts": ["文件名.py"]}` 后重跑 `scan --force`。
-
-**某个项目一直显示「无变化」但确实改过**
-`scan --force --only 关键字`。
-
-**索引里出现 ⚠️ 失联**
-原工作区已被删除，档案与源码副本仍完整保留。
-
-**项目目录体积偏大**
-查看 `manifest.json` 的 `excluded.external` 与 `source/` 下的大文件。默认单文件 5 MB、单项目源码 40 MB、资源阈值 256 KB，超出只登记不复制。
-
-**git 仓库体积异常**
-归档规则改过之后，历史提交里可能还留着旧的大文件：`python .../archiver.py git-clean`。
-
-**`sync --push` 说「远端有本地没有的提交」**
-远端被别处推过内容，本地落后了。这是唯一不自动处理的情况——强制推会抹掉别人的提交。
-先在该仓库 `git pull --rebase` 处理完冲突，再跑一次 `sync --push`。
+- Only projects whose **fingerprint changed** enter `pending`, so the model call count is 0 on stable days
+- Schedule it off-peak and bind it to a cheaper model
+- **Always pass `--target` explicitly in scheduled jobs** — do not rely on the environment variable
 
 ---
 
-## 💝 支持这个项目
+## ❓ FAQ
 
-如果它帮你找回过以为已经丢掉的源码，欢迎点一个 Star，或把它转给同样被「对话里做过、却找不到工程」困扰的朋友。Issue 里的问题、PR 里的新适配器，都是最直接的支持。
+**Nothing is found**
+Confirm that `.jsonl` transcripts exist under `~/.workbuddy/projects/` (or `~/.claude/projects/`). A fresh install with no prior conversations has nothing to archive.
 
-想交流使用心得或展示成果，可以到 [Discussions](https://github.com/winrich/dev-project-archivist/discussions)；发帖前请先读一下[欢迎帖](docs/community/welcome.zh.md)。
+**Classification is wrong — a chat got treated as a project**
+Run `scan --dry-run` first and look at the table. The rule is "source files ≥ 5 and at least 30% of the document count". Tune with `--min-code N`; to permanently exclude a workspace, set `skip: true` for it in `overrides.json`.
+
+**Wrong project name or description**
+Override `title` / `background` / `purpose` in `overrides.json` by workspace path or archive directory name, then re-run `render`.
+
+**A core script was excluded by mistake**
+The tool drops one-off scripts shaped like `repro_*`, `check_*`, `*_bak`. If it hits a real file, add `{"keep_scripts": ["name.py"]}` to `overrides.json` and re-run `scan --force`.
+
+**A project keeps saying "no changes" although it did change**
+`scan --force --only KEYWORD`.
+
+**The index shows ⚠️ lost**
+The original workspace was deleted; the archive and its source copy are still intact.
+
+**The project directory is larger than expected**
+Check `excluded.external` in `manifest.json` and the large files under `source/`. Defaults: 5 MB per file, 40 MB of source per project, 256 KB resource threshold — anything above is logged rather than copied.
+
+**The git repository is suspiciously large**
+After changing exclusion rules, old large blobs may remain in history: `python .../archiver.py git-clean`.
+
+**`sync --push` says the remote has commits you don't have**
+Someone pushed elsewhere and you are behind. This is the one case it refuses to handle — forcing would wipe their commits. Run `git pull --rebase` in that repo, resolve, then `sync --push` again.
 
 ---
 
-## 🤝 贡献
+## 💝 Support this project
 
-完整规范见 [CONTRIBUTING.md](CONTRIBUTING.md)，安全相关问题见 [SECURITY.md](SECURITY.md)。
+If this tool helped you recover source you thought was gone, a star is appreciated — as is sharing it with someone who keeps losing track of work done in chat. Issues and adapter PRs are the most useful support of all.
 
-欢迎 Issue 和 PR，尤其欢迎这几类：
+To swap tips or show what you recovered, visit [Discussions](https://github.com/winrich/dev-project-archivist/discussions); please read the [welcome post](docs/community/welcome.en.md) before posting.
 
-- 新增其他 AI 工具的适配器（Codex CLI / Cline / Roo Code / Cursor）
-- 修正某类工程被误剔或漏抽的文件规则
-- 改进 README 渲染的可读性
-- 英文文档的措辞修正
+---
 
-提交前请跑一遍：
+## 🤝 Contributing
+
+Full guidelines: [CONTRIBUTING.md](CONTRIBUTING.md). For security issues, see [SECURITY.md](SECURITY.md).
+
+Issues and PRs are welcome. Especially useful:
+
+- Adapters for other AI tools (Codex CLI / Cline / Roo Code / Cursor)
+- Fixes for file rules that wrongly exclude or include something
+- Readability improvements to the rendered READMEs
+- Wording fixes in the English docs
+
+Before submitting, please run:
 
 ```bash
-python -m unittest discover -s scripts/tests   # 全量，离线可跑
+python -m unittest discover -s scripts/tests   # full suite, offline
 python scripts/archiver.py scan --dry-run
 ```
 
-改动记入 [CHANGELOG.md](CHANGELOG.md)。发版口径写在它的开头：版本号 = 已完成档位的最高一个，
-`pyproject.toml` / `__version__` / `CHANGELOG` 首条目三处必须同数（`test_release.py` 会拦住不一致）。
+Changes go into [CHANGELOG.md](CHANGELOG.md). Its header states the rule: the version equals the highest
+completed milestone, and `pyproject.toml` / `__version__` / the top CHANGELOG entry must agree
+(`test_release.py` fails otherwise).
 
 ---
 
-## 🔧 开发文档
+## 🔧 Development notes
 
-架构、设计约束、各命令的实现语义与项目结构见 [DEVELOPMENT.md](DEVELOPMENT.md)。
+Architecture, design constraints, per-command internals and the repository layout: [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ---
 
 ## 📄 License
 
-[AGPL-3.0](LICENSE)（GNU Affero General Public License v3）
+[AGPL-3.0](LICENSE) (GNU Affero General Public License v3)
 
 ---
 
 <p align="center">
-  ⭐ <b>如果这个项目对你有帮助，请给个 Star 支持一下。</b> ⭐
+  ⭐ <b>If this project helped you, a star is appreciated.</b> ⭐
 </p>

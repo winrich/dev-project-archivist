@@ -5,7 +5,7 @@
 ## 一、三份过程记录
 
 不是产品文档。留在这里是为了**将来能回看当时的判断依据**：为什么砍掉某些方向、为什么某个语义要写死、
-某个坑当初是怎么踩的。产品文档看根目录的 [README](../README.md) 与 [CHANGELOG](../CHANGELOG.md)。
+某个坑当初是怎么踩的。产品文档看根目录的 [README](../README.zh.md) 与 [CHANGELOG](../CHANGELOG.md)。
 
 | 文档 | 回答什么问题 |
 |---|---|
@@ -26,8 +26,8 @@
 | 文件 | 是什么 |
 |---|---|
 | [community/welcome.zh.md](community/welcome.zh.md) / [welcome.en.md](community/welcome.en.md) | Discussions 欢迎帖草稿，供维护者复制发布；含发帖前须知与欢迎的帖子类型 |
-| [CONTRIBUTING.md](../CONTRIBUTING.md) / [CONTRIBUTING.en.md](../CONTRIBUTING.en.md) | 贡献规范：三类高价值贡献、本地环境、提交前检查、公开内容红线、PR 规范 |
-| [SECURITY.md](../SECURITY.md) / [SECURITY.en.md](../SECURITY.en.md) | 安全策略：支持版本、私有报告入口、工具明确不做的事、使用者自查项 |
+| [CONTRIBUTING.md](../CONTRIBUTING.md) / [CONTRIBUTING.zh.md](../CONTRIBUTING.zh.md) | 贡献规范：三类高价值贡献、本地环境、提交前检查、公开内容红线、PR 规范 |
+| [SECURITY.md](../SECURITY.md) / [SECURITY.zh.md](../SECURITY.zh.md) | 安全策略：支持版本、私有报告入口、工具明确不做的事、使用者自查项 |
 
 **为什么要有样例**：README 需要一张「这东西长什么样」的图，但真实归档里是使用者自己的项目名、
 真实用量和真实时间分布，不能拿来当素材。所以数据全编，渲染走真函数。

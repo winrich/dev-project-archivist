@@ -1,39 +1,39 @@
-# 安全策略
+# Security Policy
 
-## 支持范围
+## Supported versions
 
-| 版本 | 是否接受安全报告 |
+| Version | Security reports accepted |
 |---|---|
-| 最新发布的 0.4.x | ✅ |
-| 更早的版本 | ❌ 请先升级到最新版再报告 |
+| Latest 0.4.x release | ✅ |
+| Earlier versions | ❌ Please upgrade to the latest release first |
 
-这个项目是**纯本地工具**：不联网、不需要账号、不上传任何会话内容。安全问题的关注点也因此集中在"本地数据有没有被意外写出去"和"归档过程中有没有执行不该执行的东西"。
+This is a **local-only tool**: no network access, no account, no upload of any conversation content. Security concerns therefore focus on "does local data accidentally get written out" and "does the archive process execute anything it shouldn't".
 
-## 如何报告
+## Reporting a vulnerability
 
-**不要开公开 Issue。** 公开 Issue 会暴露问题细节，给使用者带来风险。
+**Do not open a public issue.** A public issue exposes the details and puts users at risk.
 
-请通过 GitHub 的私有漏洞报告入口提交：打开仓库的 **Security** 标签 → **Report a vulnerability**。报告里请写清：
+Use GitHub's private vulnerability report: open the repository's **Security** tab → **Report a vulnerability**. Include:
 
-- 受影响的版本（`python scripts/archiver.py --version` 的输出）
-- 复现步骤（尽量用虚构数据，不要贴真实会话或真实路径）
-- 可能造成的影响
+- The affected version (output of `python scripts/archiver.py --version`)
+- Reproduction steps (use fictional data; do not paste real conversations or real paths)
+- The potential impact
 
-维护者会在确认后回复。请不要在修复发布前公开细节。
+Maintainers will respond after confirming. Please do not disclose details publicly until a fix is released.
 
-## 这个项目明确不做的事
+## What this project explicitly does not do
 
-- **不联网**：主流程没有任何网络请求，也不上报遥测。
-- **不上传会话**：所有转录解析、归纳、渲染都在本机完成。可选的大模型归纳也只发送压缩后的证据包，由使用者自己配置。
-- **不执行归档内容**：归档器只读取会话里的写文件记录并按路径复制文本，不执行其中代码。
-- **不覆盖手写内容**：README 划出 `AUTO` 区与 `USER-NOTE` 区，手写内容不会被下次归档覆盖。
+- **No network access**: the main pipeline makes no network requests and sends no telemetry.
+- **No conversation uploads**: all transcript parsing, summarization, and rendering happen locally. Optional LLM summarization sends only a compressed evidence package, configured by the user.
+- **No execution of archived content**: the archiver reads file-write records from conversations and copies text by path; it never executes that code.
+- **No overwriting hand-written content**: READMEs have `AUTO` and `USER-NOTE` sections; hand-written text survives re-archiving.
 
-## 使用者自己需要守住的三件事
+## What users should guard themselves
 
-1. **归档目录的权限**：里面是完整源码，别放到所有人可读的共享目录。
-2. **`ARCHIVER_TARGET` 指向**：确认它指向你自己的目录，不是别人机器的路径。
-3. **`sync --push` 的远端**：它只推每个项目仓库**自己配的**远端，且永不 force；推之前先 `sync` 看一眼清单。
+1. **Permissions on the archive directory**: it contains complete source code; do not put it in a world-readable shared location.
+2. **`ARCHIVER_TARGET` value**: confirm it points to your own directory, not a path on someone else's machine.
+3. **`sync --push` remotes**: it only pushes to each project repo's **own configured** remote and never forces; run `sync` first to review the list.
 
 ---
 
-[English version](SECURITY.en.md)
+[中文版本](SECURITY.zh.md)
