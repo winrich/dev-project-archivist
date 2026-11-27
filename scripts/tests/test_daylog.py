@@ -47,7 +47,7 @@ EVENTS = [
     ev("tool", name="Edit"),
     ev("write", rel="src/b.xaml", op="edit", content=""),
     ev("tool", name="Write"),
-    ev("write", rel="", external="C:/Users/x/Temp/tmp1.tmp", op="write"),
+    ev("write", rel="", external="/fake/Temp/tmp1.tmp", op="write"),
     ev("ts", value="2026-11-19T16:00:00Z"),
     ev("prompt", text="颜色再深一点"),
 
@@ -96,7 +96,7 @@ class DayBucketTest(unittest.TestCase):
         c = collect(EVENTS)
         b = c.days["2026-11-19"]
         self.assertEqual(b["external"].get("Temp"), 1)
-        self.assertNotIn("C:/Users/x/Temp/tmp1.tmp", b["files"])
+        self.assertNotIn("/fake/Temp/tmp1.tmp", b["files"])
         self.assertEqual(c.write_calls, 5)
         self.assertEqual(c.write_hits, 4)
         self.assertEqual(c.external_hits, 1)
@@ -340,10 +340,10 @@ class ExternalGroupTest(unittest.TestCase):
         ev("write", rel="src/a.cs", op="edit", content=""),
         ev("ts", value="2026-11-19T09:10:00Z"),
         ev("tool", name="Edit"),
-        ev("write", rel="", external="C:/work/other-repo/b.lua", op="edit"),
+        ev("write", rel="", external="/fake/other-repo/b.lua", op="edit"),
         ev("ts", value="2026-11-19T09:20:00Z"),
         ev("tool", name="Write"),
-        ev("write", rel="", external="C:/work/other-repo/b.lua", op="write"),
+        ev("write", rel="", external="/fake/other-repo/b.lua", op="write"),
     ]
 
     def test_external_kept_out_of_workspace_files(self):
