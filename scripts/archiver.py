@@ -55,6 +55,10 @@ from adapters.base import (EV_ASSISTANT, EV_PROMPT,  # noqa: E402
                            EV_TITLE, EV_TOOL, EV_TOOL_RESULT, EV_TS, EV_USAGE,
                            EV_WRITE, cmd_class, git_identity, git_work_tree,
                            tool_type)
+try:
+    import external_store as EXT  # 工作区外成果探测（空壳升级判定用）
+except ImportError:
+    EXT = None  # noqa: E402
 
 # ---------------------------------------------------------------- 版本
 # 与 pyproject.toml 的 version、CHANGELOG.md 最新条目标题必须一致。
@@ -87,6 +91,8 @@ DEFAULT_TARGET = Path(os.environ.get("ARCHIVER_TARGET")
 STATE_FILE = "state.json"
 INDEX_MD = "INDEX.md"
 INDEX_JSON = "index.json"
+REPORT_INDEX = "report_index.json"      # 报告档案索引，由 cmd_report 登记
+REPORT_SUBDIR = "report"                # 归档 HTML 目录
 CHANGELOG = "CHANGELOG.md"
 EVIDENCE_DIR = "_evidence"
 SUMMARY_FILE = "_summary.json"
@@ -353,6 +359,11 @@ def md_cell(s, limit: int = 0) -> str:
     if limit and len(s) > limit:
         s = s[:limit].rstrip() + "…"
     return s
+
+
+def norm_key_manage(key: str) -> str:
+    """人工配置键规范化：与管理数据层 norm_key 保持一致"""
+    return (key or "").replace("\\", "/").rstrip("/").lower()
 
 
 def load_overrides(target: Path) -> dict:
@@ -984,6 +995,7 @@ class Project:
         self.name = ""
         self.name_src = ""      # 名字取自哪个证据（git remote / 工程清单 / 目录名 / 会话标题）
         self.entries = []       # 工程入口文件，供 --explain 展示判定依据
+        self.external_dirs = [] # 工作区外的成果目录（空壳升级判定用）
         self.key = ""
 
     def compute(self, min_code: int):
@@ -2043,6 +2055,22 @@ def run_scan(target: Path, dry_run=False, limit=0, only="", force=False,
             p.name = safe_name(ovp["title"])
         if ovp.get("type") in ("代码项目", "文档任务", "混合产物"):
             p.type = ovp["type"]
+
+        # 空壳升级判定：工作区无源码，但会话里大量写入工作区外的工程目录时，
+        # 它不是空壳。从转录提取外部成果，命中工程根就把 type 升级为代码项目，
+        # 并记录路径（不复制源码，不改变归档边界）。
+        if p.type == "空壳" and EXT is not None:
+            try:
+                ext = EXT.detect_for_project(p.sessions, idx, adapters, by_name,
+                                             p.workspace, archive_root=str(target))
+                if ext:
+                    p.external_dirs = ext
+                    p.type = "代码项目"
+                    log(f"  · {p.name}：工作区无源码，但检出 {len(ext)} 处外部工程，"
+                        f"升级为代码项目（不复制源码）")
+            except Exception as e:
+                log(f"  · {p.name}：外部成果探测失败（不影响归档）：{e}")
+
         # 只对代码项目与混合产物建归档（文档任务仅在索引中留一行）
         if p.type not in ("代码项目", "混合产物"):
             st = state.proj(p.key)
@@ -2055,7 +2083,8 @@ def run_scan(target: Path, dry_run=False, limit=0, only="", force=False,
                        "first_ts": p.first_ts, "last_ts": p.last_ts,
                        "sessions": len(p.sessions), "files": p.cls["total_files"],
                        "bytes": p.cls["total_bytes"], "archived": False,
-                       "status": "active" if Path(p.workspace).exists() else "missing"})
+                       "status": "active" if Path(p.workspace).exists() else "missing",
+                       "external_dirs": [], "upgraded_from_shell": False})
             skipped += 1
             continue
 
@@ -2126,6 +2155,8 @@ def run_scan(target: Path, dry_run=False, limit=0, only="", force=False,
             "workspace": p.workspace,
             "kind": p.kind,
             "type": p.type,
+            "external_dirs": p.external_dirs,
+            "upgraded_from_shell": bool(p.external_dirs),
             "language": p.cls.get("language", "—"),
             "langs": p.cls.get("langs", [])[:6],
             "tech": p.tech,
@@ -2186,6 +2217,8 @@ def run_scan(target: Path, dry_run=False, limit=0, only="", force=False,
             "last_archived": iso(now_ts()),
             "status": "active",
             "evidence_hash": sha1_text(ev),
+            "external_dirs": p.external_dirs,
+            "upgraded_from_shell": bool(p.external_dirs),
         })
         touched.append(p.name)
         (added if is_new else updated).append(p.name)
@@ -2641,8 +2674,10 @@ def run_render(target: Path, rename=True, verbose=True):
             continue
 
         # 大模型摘要产出后，用摘要标题重命名目录（标题变化时才动）
+        # 人工改名（name_source=manual）优先：防止下次 run 被 LLM 摘要改回去
         s = load_summary(adir)
-        if rename and s.get("title") and st.get("name") != s["title"]:
+        manual_name = st.get("name_source") == "manual"
+        if rename and not manual_name and s.get("title") and st.get("name") != s["title"]:
             new_name = safe_name(s["title"])
             old_dir = st.get("dir", "")
             base = f"{day(st.get('first_ts')) or '0000-00-00'}_{new_name}"
@@ -2696,6 +2731,24 @@ def run_render(target: Path, rename=True, verbose=True):
 def write_index(target: Path, rows: list, state: State, ov: dict = None):
     now = iso(now_ts())
     cache = {}
+    # 管理字段：置顶优先；取消关注只留标记，不删条目（索引始终是完整账本）
+    ov = ov or {}
+    pinned = {k.lower() for k, v in ov.items() if not k.startswith("_")
+              and isinstance(v, dict) and v.get("pinned")}
+    hidden = {k.lower() for k, v in ov.items() if not k.startswith("_")
+              and isinstance(v, dict) and v.get("watching") is False}
+
+    def is_pinned(st, adir):
+        return (norm_key_manage(st.get("workspace")) in pinned
+                or (adir.name or "").lower() in pinned)
+
+    def is_hidden(st, adir):
+        return (norm_key_manage(st.get("workspace")) in hidden
+                or (adir.name or "").lower() in hidden)
+
+    # 置顶项稳定提前；无置顶时保持原顺序（与基线逐字节一致）
+    if pinned:
+        rows = sorted(rows, key=lambda x: not is_pinned(x[0], x[1]))
 
     def nm(st, adir):
         o = pick_override(ov or {}, st.get("workspace"), adir.name)
@@ -2726,6 +2779,10 @@ def write_index(target: Path, rows: list, state: State, ov: dict = None):
         rel = adir.name
         status = st.get("status")
         mark = "" if status == "active" else " ⚠️失联"
+        if is_hidden(st, adir):
+            mark += " 🚫已取消关注"
+        if is_pinned(st, adir):
+            mark += " 📌"
         L.append(f"| {i} | [{name}](./{rel}/README.md){mark} | {day(st.get('first_ts'))} "
                  f"| {day(st.get('last_ts'))} | {day(st.get('last_archived'))} "
                  f"| {st.get('type') or '—'} | {lang} | {st.get('sessions', 0)} "
@@ -2769,18 +2826,33 @@ def write_index(target: Path, rows: list, state: State, ov: dict = None):
     data = {
         "generated_at": now,
         "total": len(rows),
-        "projects": [{
-            "name": nm(st, adir),
-            "dir": st.get("dir"), "type": st.get("type"),
-            "language": effective_summary(adir, cache).get("language") or st.get("language"),
-            "first_dev": day(st.get("first_ts")), "last_dev": day(st.get("last_ts")),
-            "archived_at": day(st.get("last_archived")),
-            "sessions": st.get("sessions", 0), "files": st.get("files", 0),
-            "status": st.get("status"), "workspace": st.get("workspace"),
-            "purpose": (pick_override(ov or {}, st.get("workspace"), adir.name).get("purpose")
-                        or effective_summary(adir, cache).get("purpose") or "")[:200],
-        } for st, adir in rows],
+        "projects": [
+            {
+                "name": nm(st, adir),
+                "dir": st.get("dir"), "type": st.get("type"),
+                "language": effective_summary(adir, cache).get("language") or st.get("language"),
+                "first_dev": day(st.get("first_ts")), "last_dev": day(st.get("last_ts")),
+                "archived_at": day(st.get("last_archived")),
+                "sessions": st.get("sessions", 0), "files": st.get("files", 0),
+                "status": st.get("status"), "workspace": st.get("workspace"),
+                "purpose": (pick_override(ov or {}, st.get("workspace"), adir.name).get("purpose")
+                            or effective_summary(adir, cache).get("purpose") or "")[:200],
+            }
+            for st, adir in rows
+        ],
     }
+    # 管理字段只在有显式设置时写入，避免改变既有 index.json 结构
+    for st, adir in rows:
+        ov_one = pick_override(ov or {}, st.get("workspace"), adir.name)
+        item = next((x for x in data["projects"] if x.get("dir") == st.get("dir")), None)
+        if not item:
+            continue
+        if ov_one.get("pinned"):
+            item["pinned"] = True
+        if ov_one.get("watching") is False:
+            item["watching"] = False
+        if ov_one.get("note"):
+            item["note"] = ov_one["note"][:200]
     atomic_write(target / INDEX_JSON, json.dumps(data, ensure_ascii=False, indent=2))
 
 
@@ -2984,7 +3056,12 @@ def cmd_find(target: Path, query: str, as_json: bool = False,
 
     need = set(toks)
     hits = []
+    hidden_count = 0
     for p in data.get("projects") or []:
+        # 管理界面「取消关注」的项目默认不出现在检索结果里；--all 可包含
+        if p.get("watching") is False and not show_all:
+            hidden_count += 1
+            continue
         adir = target / (p.get("dir") or "")
         covered = set()
         score = 0
@@ -3060,6 +3137,8 @@ def cmd_find(target: Path, query: str, as_json: bool = False,
     print()
     if not hits:
         print(f"没有命中「{query}」")
+        if hidden_count:
+            print(f"  另有 {hidden_count} 个已取消关注的项目被跳过，加 --all 可一并检索")
         print("  换个更短的词试试；或先确认归档里有这个项目（archiver.py status）")
         return 1
 
@@ -3560,6 +3639,105 @@ def build_report_html(d: dict) -> str:
 """
 
 
+# ---------------------------------------------------------------- 报告档案索引
+# 索引是「每天生成的报告」的清单：cmd_report 落盘 HTML 后登记一条。
+# 键 = 文件名（含 from_to 区间），同区间重复生成则覆盖条目（幂等）。
+
+REPORT_INDEX_VERSION = 1
+
+
+def report_index_path(target: Path) -> Path:
+    return Path(target) / REPORT_INDEX
+
+
+def load_report_index(target: Path) -> dict:
+    """读索引；缺失或损坏返回空结构，不抛异常（管理台要能降级）。"""
+    try:
+        d = json.loads(read_text(report_index_path(target)) or "{}")
+        if not isinstance(d, dict) or not isinstance(d.get("reports"), list):
+            raise ValueError("bad shape")
+    except Exception:
+        d = {}
+    d.setdefault("version", REPORT_INDEX_VERSION)
+    d.setdefault("reports", [])
+    return d
+
+
+def save_report_index(target: Path, idx: dict):
+    """原子写索引。写操作由调用方持 Lock(target)。"""
+    idx["version"] = REPORT_INDEX_VERSION
+    idx["updated_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    atomic_write(report_index_path(target),
+                 json.dumps(idx, ensure_ascii=False, indent=2) + "\n")
+
+
+def index_report(target: Path, d: dict, path: Path) -> bool:
+    """把刚生成的报告登记进索引。返回 True 表示新增，False 表示覆盖同区间条目。
+
+    调用方应持有 Lock(target)。索引只存元信息（区间/摘要/摘要指纹），
+    HTML 正文仍在 report/ 下独立文件里——索引坏了不会毁掉报告。
+    """
+    idx = load_report_index(target)
+    name = path.name
+    t = d.get("totals", {})
+    entry = {
+        "name": name,
+        "from": d.get("from", ""),
+        "to": d.get("to", ""),
+        "days": d.get("days", 0),
+        "generated_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+        "prompts": t.get("prompts", 0),
+        "sessions": t.get("sessions", 0),
+        "projects": t.get("projects", 0),
+        "files": t.get("files", 0),
+        "tokens": t.get("tok_in", 0) + t.get("tok_out", 0),
+        "sha256": sha1_file(path),
+        "bytes": path.stat().st_size if path.exists() else 0,
+    }
+    reports = [r for r in idx["reports"] if r.get("name") != name]
+    is_new = len(reports) == len(idx["reports"])
+    reports.append(entry)
+    # 按 to（报告截止日）倒序，最新在区间最前的排上方
+    reports.sort(key=lambda r: (r.get("to", ""), r.get("generated_at", "")), reverse=True)
+    idx["reports"] = reports
+    save_report_index(target, idx)
+    return is_new
+
+
+def backfill_report_index(target: Path) -> int:
+    """把 report/ 下已有的 HTML 补登记进索引（一次性迁移存量报告）。
+
+    仅登记文件名符合 report-日期_日期.html 的文件，跳过已登记的；
+    摘要字段留空（存量 HTML 的 totals 无法无损反推），但可按日期检索与打开。
+    返回新登记条数。调用方应持有 Lock(target)。
+    """
+    idx = load_report_index(target)
+    have = {r.get("name") for r in idx["reports"]}
+    added = 0
+    report_dir = Path(target) / REPORT_SUBDIR
+    try:
+        htmls = sorted(report_dir.glob("report-*.html"))
+    except Exception:
+        htmls = []
+    for p in htmls:
+        m = re.fullmatch(r"report-(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})\.html", p.name)
+        if not m or p.name in have:
+            continue
+        st = p.stat()
+        idx["reports"].append({
+            "name": p.name, "from": m.group(1), "to": m.group(2),
+            "days": 0,
+            "generated_at": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%dT%H:%M:%S"),
+            "prompts": 0, "sessions": 0, "projects": 0, "files": 0, "tokens": 0,
+            "sha256": sha1_file(p), "bytes": st.st_size,
+        })
+        added += 1
+    if added:
+        idx["reports"].sort(key=lambda r: (r.get("to", ""), r.get("generated_at", "")), reverse=True)
+        save_report_index(target, idx)
+    return added
+
+
 def cmd_report(target: Path, sources=None, days: int = 30, end: str = "",
                out: str = "", open_it: bool = False) -> int:
     """写一份单文件 HTML 账本（可截图、可直接发人）。只写这一个文件。"""
@@ -3569,9 +3747,33 @@ def cmd_report(target: Path, sources=None, days: int = 30, end: str = "",
         return 1
 
     text = build_report_html(d)
-    out_dir = Path(out) if out else (target / "report")
+    out_dir = Path(out) if out else (target / REPORT_SUBDIR)
     path = out_dir / f"report-{d['from']}_{d['to']}.html"
     atomic_write(path, text)
+
+    # 登记到档案索引：SQLite 为主 + JSON 兼容镜像（双写，与归档器共用互斥锁）
+    try:
+        import report_store as R
+        with Lock(target):
+            R.init_schema(target)
+            is_new = index_report(target, d, path)          # JSON 镜像
+            db = R.ReportDB(target)
+            db.upsert_report({
+                "name": path.name, "source": "all",
+                "from": d.get("from", ""), "to": d.get("to", ""),
+                "days": d.get("days", 0), "generated_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                "prompts": d.get("totals", {}).get("prompts", 0),
+                "sessions": d.get("totals", {}).get("sessions", 0),
+                "projects": d.get("totals", {}).get("projects", 0),
+                "files": d.get("totals", {}).get("files", 0),
+                "tokens": d.get("totals", {}).get("tok_in", 0) + d.get("totals", {}).get("tok_out", 0),
+                "sha256": sha1_file(path), "bytes": path.stat().st_size if path.exists() else 0,
+            })
+            db.touch_updated()
+        print(f"  档案索引：{'新增' if is_new else '更新'} {path.name}（SQLite + JSON）")
+    except Exception as e:
+        # 索引失败不影响报告本身已落盘
+        print(f"  警告：档案索引登记失败（报告已写入）：{e}")
 
     print(f"已写入 {path}")
     total_tok = d["totals"]["tok_in"] + d["totals"]["tok_out"]
@@ -5214,7 +5416,8 @@ def main():
     ap.add_argument("cmd",
                     choices=["scan", "render", "run", "pending", "status",
                              "git-clean", "daylog", "log", "find", "stats", "report",
-                             "restore", "sync"],
+                             "report-backfill", "report-migrate", "sessions-sync",
+                             "external-refresh", "restore", "sync", "manage"],
                     help="scan=采集/render=渲染/run=全流程/pending=待归纳/status=状态/"
                          "git-clean=重建归档器创建的 git 仓库以清除历史大对象/"
                          "daylog=按天汇总开发活动（预览，零写入）/"
@@ -5222,8 +5425,13 @@ def main():
                          "find=跨项目检索（名字/文件名/指令原文，只读）/"
                          "stats=跨天账本：最近 N 天的对话/文件/token（只读）/"
                          "report=写成单文件 HTML 账本（可截图分享）/"
+                         "report-backfill=把已有 HTML 报告补登记进档案索引/"
+                         "report-migrate=把 JSON 索引迁到 SQLite 并抽取会话明细/"
+                         "sessions-sync=从各平台转录刷新 sessions 表/"
+                         "external-refresh=重扫工作区外工程成果，升级空壳并刷新路径（不复制源码）/"
                          "restore=按日恢复归档快照到副本目录（默认只预览）/"
-                         "sync=归档仓库同步：看哪些没推，或 --push 推到各自远端")
+                         "sync=归档仓库同步：看哪些没推，或 --push 推到各自远端/"
+                         "manage=本地浏览器管理台（--port 可改端口，仅监听 127.0.0.1）")
     ap.add_argument("query", nargs="?", default="",
                     help="find 的检索词，可空格分隔多个词（全部命中才计入）")
     ap.add_argument("--open", action="store_true", dest="open_it",
@@ -5260,11 +5468,27 @@ def main():
     ap.add_argument("--push", action="store_true",
                     help="sync 真正提交并推送到各归档仓库自己配的远端（默认只预览；"
                          "未配远端的不推，永不 force）")
+    ap.add_argument("--port", type=int, default=8765,
+                    help="manage 管理台监听端口（默认 8765；0 表示自动选空闲端口）")
+    ap.add_argument("--no-browser", action="store_true",
+                    help="manage 启动时不自动打开浏览器")
     a = ap.parse_args()
 
     sources = [x.strip() for x in (a.source or "").split(",") if x.strip()]
 
     target = Path(a.target)
+    if a.cmd == "manage":
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from manage_ui import main as manage_main
+        argv = ["--target", str(target), "--port", str(a.port)]
+        if a.no_browser:
+            argv.append("--no-browser")
+        old_argv = sys.argv
+        sys.argv = [sys.argv[0]] + argv
+        try:
+            return manage_main()
+        finally:
+            sys.argv = old_argv
     if a.cmd == "daylog":
         # 只读命令：不需要目标目录，也不加锁
         return run_daylog(target, a.date or datetime.now().strftime("%Y-%m-%d"),
@@ -5278,9 +5502,71 @@ def main():
         # 只读命令：不需要目标目录，也不加锁
         return cmd_stats(sources, days=a.days or 7, end=a.date, as_json=a.json)
     if a.cmd == "report":
-        # 只写一个 html 文件，不碰归档正文，因此不加锁
+        # 写一个 html 文件 + 登记索引（索引写入内部持锁），不碰归档正文
         return cmd_report(target, sources=sources, days=a.days or 30,
                           end=a.date, out=a.out, open_it=a.open_it)
+    if a.cmd == "report-backfill":
+        with Lock(target):
+            n = backfill_report_index(target)
+        print(f"补登 {n} 份存量报告到档案索引")
+        return 0
+    if a.cmd in ("report-migrate", "sessions-sync"):
+        import report_store as R
+        if a.cmd == "report-migrate":
+            with Lock(target):
+                result = R.migrate_from_json(target)
+            print(f"迁移完成：报告 {result['reports']} 条、会话 {result['sessions']} 条")
+            print(f"  数据库：{R.db_path(target)}（旧 report_index.json 已保留）")
+        else:
+            with Lock(target):
+                R.init_schema(target)
+                n = R.ReportDB(target).replace_sessions(build_index(get_adapters()))
+            print(f"会话明细已刷新：{n} 条")
+        return 0
+    if a.cmd == "external-refresh":
+        if EXT is None:
+            print("错误：external_store 模块不可用")
+            return 1
+        adapters = get_adapters()
+        by_name = {x.name: x for x in adapters}
+        idx = build_index(adapters)
+        projects = collect_projects(idx, DEFAULTS["min_code_files"])
+        state = State(target)
+        upgraded, refreshed = [], []
+        with Lock(target):
+            for p in projects:
+                try:
+                    ext = EXT.detect_for_project(p.sessions, idx, adapters, by_name,
+                                             p.workspace, archive_root=str(target))
+                except Exception:
+                    ext = []
+                st = state.proj(p.key)
+                was_shell = st.get("type") == "空壳"
+                if ext and (was_shell or st.get("upgraded_from_shell")):
+                    st["type"] = "代码项目"
+                    st["upgraded_from_shell"] = True
+                    if was_shell:
+                        upgraded.append(p.name)
+                    else:
+                        refreshed.append(p.name)
+                elif ext and st.get("external_dirs") != ext:
+                    refreshed.append(p.name)
+                if ext:
+                    st["external_dirs"] = ext
+                elif st.get("upgraded_from_shell") and not ext:
+                    # 曾升级但如今外部成果已消失：退回空壳标记
+                    st["type"] = "空壳"
+                    st["upgraded_from_shell"] = False
+                    st["external_dirs"] = []
+                    refreshed.append(p.name)
+            state.save()
+        print(f"外部成果刷新：升级 {len(upgraded)} 个、更新 {len(refreshed)} 个")
+        for n in upgraded:
+            print(f"  ↑ {n}：空壳 → 代码项目（外链）")
+        for n in refreshed:
+            print(f"  ~ {n}：external_dirs 已更新")
+        print(f"  状态文件：{target / STATE_FILE}")
+        return 0
     if a.cmd == "find":
         # 只读命令：不加锁、不写任何文件
         return cmd_find(target, a.query, as_json=a.json,

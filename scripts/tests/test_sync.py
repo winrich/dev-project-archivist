@@ -43,7 +43,8 @@ def run_git(cwd: Path, *args, check: bool = True):
     env = dict(os.environ)
     env["GIT_CONFIG_NOSYSTEM"] = "1"
     env["GIT_TERMINAL_PROMPT"] = "0"
-    r = subprocess.run([GIT, "-c", "core.autocrlf=false"] + list(args),
+    r = subprocess.run([GIT, "-c", "core.autocrlf=false",
+                        "-c", "user.name=archiver", "-c", "user.email=archiver@local"] + list(args),
                        cwd=str(cwd), capture_output=True, text=True,
                        encoding="utf-8", errors="replace", env=env)
     if check and r.returncode != 0:
@@ -71,6 +72,9 @@ class SyncBase(unittest.TestCase):
         b = self.root / "remotes" / f"{name}.git"
         b.parent.mkdir(parents=True, exist_ok=True)
         run_git(self.root, "init", "-q", "--bare", str(b))
+        # 本地仓库用 -b main 推送；裸仓库默认 HEAD 仍指向 master，
+        # 不显式对齐会让 git log 读不到推送上来的提交（CI 各 runner 同样复现）。
+        run_git(b, "symbolic-ref", "HEAD", "refs/heads/main")
         return b
 
     def repo(self, name: str, remote: Path = None, commit: bool = True) -> Path:

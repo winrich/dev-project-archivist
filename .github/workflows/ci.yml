@@ -15,6 +15,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
         python: ["3.8", "3.11", "3.13"]
+        # ubuntu-latest 已不提供 Python 3.8；Windows 仍保留 3.8 覆盖
+        exclude:
+          - os: ubuntu-latest
+            python: "3.8"
     steps:
       - uses: actions/checkout@v4
 

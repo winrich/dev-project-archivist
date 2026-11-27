@@ -8,11 +8,11 @@ version = "0.4.0"
 description = "把散落在 AI 对话窗口里的软件项目，收拢成可浏览、可移交、可长期同步的本地源码档案"
 readme = "README.md"
 requires-python = ">=3.8"
-license = { text = "MIT" }
+license = { text = "AGPL-3.0" }
 keywords = ["ai-coding", "claude-code", "cursor", "archive", "session", "cli"]
 classifiers = [
     "Environment :: Console",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
     "Programming Language :: Python :: 3",
     "Topic :: Software Development :: Version Control :: Git",
 ]

@@ -70,7 +70,7 @@ AI made writing software easy, but **the output is scattered across conversation
 |---|---|
 | I use AI coding agents too, and want to collect **my own** conversation projects | Install this tool (keep reading) |
 | I just want to take over someone's finished project and keep developing it | **Do not install.** Take that project folder (with `source/`, `.git/`, `README.md`) and `git clone` or unzip it |
-| I want to hand one of my own projects to someone else | See "Handing a project over" below |
+| I want to hand one of my own projects to someone else | See "Handing a project over" in [DEVELOPMENT.en.md](DEVELOPMENT.en.md) |
 
 This tool contains no project data. It only turns **local sessions** into a source archive. Other people's sessions live on their machines; installing it here finds nothing.
 
@@ -302,6 +302,20 @@ One self-contained HTML file: double-click and it opens — no network requests,
 Terminal output for every command — classification table, search hits, ledger numbers, restore preview — is in
 "🧠 Understand it in 30 seconds" above, right under each command.
 
+If you would rather manage things in a browser, there is also a console that listens on localhost only. The project list and overview look like this:
+
+<p align="center">
+  <img src="docs/img/manage-demo.png" alt="Console project list: tree menu, type/language/date filters, activity score and 14-day sparkline, pinned/external/unwatched markers, pagination">
+</p>
+
+<p align="center">
+  <img src="docs/img/manage-demo-overview.png" alt="Console overview: six stat cards, 14-day activity, type/tier/language breakdowns, recently updated projects">
+</p>
+
+The tree menu has four groups (Overview / Manage / Analyse / System): overview, projects, activity ranking, date-based reports, and settings. See "🛠️ Management console" below for details.
+
+> Both images use **invented data**: [`docs/sample/build_manage_demo.py`](docs/sample/build_manage_demo.py) feeds made-up projects to the **real console page** (only the data source is replaced — the page code is untouched), then a headless browser takes the shot. Change the styles and rerun the script to regenerate.
+
 ---
 
 ## 🏗️ Pipeline
@@ -323,109 +337,19 @@ The real work is **deterministic parsing**. The model only handles the last step
 
 ---
 
-## 🧩 Architecture: a thin adapter layer, a thick platform-agnostic core
-
-Every platform difference lives in `adapters/`; the main program never sees another vendor's JSON:
-
-```mermaid
-flowchart TB
-  subgraph AD["adapters/ · per platform · thin"]
-    direction LR
-    W["workbuddy.py"]
-    CC["claude_code.py"]
-    MINE["your_tool.py"]
-    W ~~~ CC ~~~ MINE
-  end
-  E{{"7 neutral events"}}
-  subgraph CORE["archiver.py · platform-agnostic · thick"]
-    direction TB
-    P["SessionParser"] --> X["classify · extract"] --> R["render<br/>git · state"]
-  end
-  AD --> E --> CORE
-```
-
-There is exactly one contract between adapters and the core — **7 neutral events**:
-
-```text
-ts / title / prompt / assistant / tool / write / tool_result
-```
-
-Adding a platform = one file in `adapters/` plus one `register()` call. The main program **does not change**. See "Adding another tool" below.
-
----
-
-## 📐 Six design constraints
-
-This is not a throwaway archiving script — every rule below was written after hitting a real problem:
-
-| Constraint | How it is done | What it buys |
-|---|---|---|
-| Source only | Build output, dependencies, logs, screenshots, test samples and throwaway scripts are all excluded, each logged in `manifest.json` | A project drops from MBs to tens of KB ~ a few MB |
-| Directory must stand alone | One independent git repo plus `.gitignore` per project | Zip and send it; `git clone` continues the work |
-| Exclusions must be traceable | `manifest.json` records every exclusion and external dependency, plus `_evidence/` | When a file seems missing, check instead of guess |
-| Rendering must be idempotent | Generation is pure-function style; two consecutive runs produce 0 changes | Safe to run on a nightly schedule |
-| Incremental must be cheap | Three-level fingerprints (workspace / file / content sha1) | No repeated parsing or model calls in steady state |
-| Must work without a model | Missing summary falls back to the `derive_from_manifest` template | A complete archive with zero API keys |
-
----
-
-## 📦 What the output looks like
-
-```
-<archive>/
-├── INDEX.md          # Master index: project / first dev / last dev / last update / type / language / sessions / files / purpose
-├── index.json        # Machine-readable manifest
-├── CHANGELOG.md      # Per-run change log (added / updated / lost / soft-deleted)
-├── overrides.json    # Manual corrections: title / background / purpose, keep_scripts for false positives
-├── state.json        # Fingerprint store — the basis for incremental sync
-├── _trash/           # Directories no longer archived (soft delete, recoverable)
-├── _restore/         # Historical snapshots produced by `restore` (archive untouched)
-└── 2026-03-15_批量重命名工具/
-    ├── README.md          # Background / features / implementation / source / sessions / overview
-    ├── manifest.json      # Metadata + exclusion log + external dependency list
-    ├── .gitignore  .git/  # Standalone repo, init + commit on first archive
-    ├── open-session.bat  # Double-click to jump back to the latest session
-    ├── source/            # Clean source, original relative paths preserved
-    ├── _docs/             # Design documents (docx/pdf etc.)
-    ├── _evidence/evidence.md
-    ├── _meta/
-    │   ├── conversations.md  # Every user instruction in this project, in order
-    │   ├── integrity.md      # Project integrity check
-    │   ├── sessions.json
-    │   └── memory/           # Workspace project memory
-    └── _summary.json      # Summary result (absent → template fallback)
-```
-
-**Directories are deliberately small**: only source, project files, config and necessary small assets. Every exclusion is logged for traceability; a typical project is tens of KB to a few MB.
-
----
-
 ## 🤖 Supported AI tools
 
 | Tool | Session data | Status |
 |---|---|---|
 | WorkBuddy | `~/.workbuddy/` | ✅ Works out of the box, includes `workbuddy://` deep links |
 | Claude Code | `~/.claude/projects/` | ✅ Works out of the box, degrades to a `claude --resume` hint when no deep link exists |
-| Other local agents | Needs its own adapter | See "Adding another tool" |
+| Other local agents | Needs its own adapter | See [DEVELOPMENT.en.md](DEVELOPMENT.en.md) |
 
 Use `--source` to pick the source. The default `all` auto-detects what is installed; you can also pass `workbuddy`, `claude-code`, or a comma-separated combination. A tool with no local data is skipped silently instead of failing.
 
 **Why web-based ChatGPT / Claude is not supported**: those services keep conversations in the cloud, so the code never lands on your disk as files. The archivist cannot obtain its single most important deliverable — the complete source. This tool targets **agent-style tools that write files locally**.
 
-### 🔌 Adding another tool
-
-Each file under `scripts/adapters/` maps to one platform. Implement an `Adapter` subclass and call `register()` at the end of `__init__.py`:
-
-```python
-class MyAdapter(Adapter):
-    name = "my-tool"           # also the value for --source
-    display = "My Tool"
-    def probe(self) -> bool: ...               # does this platform have data here?
-    def load_index(self): ...                  # returns Index: ids() / info(sid) / transcript(sid)
-    def iter_events(self, path, cwd=""): ...   # yields the 7 neutral events
-```
-
-The event contract and ready-made helpers live at the top of `scripts/adapters/base.py`. Two hard rules: `created` / `updated` in `info()` must be **epoch milliseconds** (otherwise cross-platform sorting breaks), and tool paths must go through `rel_in_cwd()`. After editing, run `python scripts/tests/test_adapters.py`.
+Platform-adapter internals are in [DEVELOPMENT.en.md](DEVELOPMENT.en.md).
 
 ---
 
@@ -513,6 +437,44 @@ Regardless of platform, every project has `_meta/conversations.md` — all user 
 
 ---
 
+## 🛠️ Management console: maintain the watched-project list
+
+If you would rather not edit `overrides.json` by hand, start a browser console that listens on **localhost only**:
+
+```bash
+python scripts/archiver.py manage --target "<archive dir>" --port 8765
+```
+
+- `--port` changes the port; `--port 0` asks the OS for a free one (the terminal prints the actual URL).
+- On first launch a random password is generated and printed **once**; set `ARCHIVER_MANAGE_PASSWORD` beforehand to use your own. The password is stored as a PBKDF2 hash in `manage.auth.json` — never in plaintext.
+- The server binds only `127.0.0.1`. Cookies are HttpOnly + SameSite=Strict, writes require a CSRF token, and five failed logins lock the client for 60 seconds.
+
+| Action | Behaviour | Safety |
+|---|---|---|
+| **Rename** | Changes the display name only (`title` in `overrides.json`); **the directory name is untouched** | Manual names survive later `render` runs |
+| **Rename directory** | Separate action; changes the directory only, display name unchanged | Rejects illegal characters and collisions, auto-backup, rollback on failure |
+| **Unwatch** | Hides the project from the default list and `find`; **source and ledger stay intact** | Switch to "All" to see and restore it |
+| **Pin** | Moves the project to the top of the index and console | Stable sort; history ledger unaffected |
+| **Details** | Aggregates purpose, tech, sessions, files, original-chat links and a manual note | Read-only |
+| **Delete** | Stops archiving (`skip=true`) and moves the directory into `_trash/` | Soft delete, recoverable by hand |
+
+The console shares the same file lock as scheduled runs, and every change is recorded in `CHANGELOG.md`.
+
+The tree menu adds three read-only analysis views on top of the maintenance actions above:
+
+| View | What it does |
+|---|---|
+| **Overview** | Six stat cards (watched / active / archived repos / source files / source size / active projects) + 14-day activity + type, tier and language breakdowns + recently updated projects |
+| **Activity ranking** | Watched projects sorted by activity score, with tier and a 14-day sparkline |
+| **Date-based reports** | Past `report` output is archived into a database; search by date to see which reports hit, and open the original HTML. You can also generate a fresh report here |
+| **Settings** | Change the console password (PBKDF2 re-hash, never stored in plaintext) |
+
+The project list also has type / language / date **filters**, configurable page size and **pagination**, and a 0–100 activity score with a 14-day sparkline on every row. The score is a four-factor weighted sum: `0.4×recency + 0.3×frequency + 0.2×output + 0.1×consistency` — recency decays by half-life, frequency and output are log-compressed to avoid head dominance, and consistency counts distinct session dates. Projects whose source lives outside the workspace are marked **external**, with the actual written directories listed in Details.
+
+> ⚠️ Renaming a directory changes the archive path and may break old links. To fix a name, use **Rename** instead.
+
+---
+
 ## 📚 Command reference
 
 The seven commands you actually use, with their output, are in "🧠 Understand it in 30 seconds" above; this is the
@@ -539,6 +501,7 @@ full flag list.
 | `find KEYWORD` | **Cross-project search**: names / file names / prompt text. All words must match. Read-only |
 | `find KEYWORD --open` | Open the original conversation of the top hit |
 | `find KEYWORD --json` | Machine-readable output (score + snippets) |
+| `manage --port 8765` | Start the local browser console; `--port 0` picks a free port, binds 127.0.0.1 only |
 | `stats --days 7` | **Cross-day ledger**: prompts / projects / files / tokens for the last N days, plus a daily bar (read-only; `--date` sets the end date, `--json` for scripts) |
 | `report --days 30` | **Write a single-file HTML ledger**: heatmap + bar chart + project cards. No paths, no prompt text — safe to share (`--out` dir, `--open` to launch) |
 | `restore` | List **which days you can go back to** (days on which the archive repos have commits) |
@@ -546,55 +509,6 @@ full flag list.
 | `restore --date 2026-11-14 --write` | Expand a copy into `<target>/_restore/2026-11-14/` — **never overwrites the archive** |
 | `restore --date 2026-11-14 --write --only KEYWORD` | Restore only matching projects |
 | `restore --date 2026-11-14 --json` | Machine-readable output |
-
----
-
-## ⏪ Going back to a given day: `restore`
-
-An archive is worth more than "one more look" — it is worth **being able to rewind**. Every project
-directory is its own git repo with one commit per scan, so "what did the archive look like on 14 Nov"
-is a question with an exact answer:
-
-```bash
-python .../archiver.py restore                            # 1. which days can I go back to
-python .../archiver.py restore --date 2026-11-14          # 2. preview, zero writes
-python .../archiver.py restore --date 2026-11-14 --write  # 3. expand a copy for real
-```
-
-### Three semantics — read these before the flags
-
-| It is | It is not |
-|---|---|
-| Taken **only from each archive repo's own git history** | Not taken from the original workspace — which may be long deleted, renamed or overwritten |
-| "What the archive looked like **at the end of that day**" | **Not "what changed that day"** — for that use `log` / `stats` |
-| Only files that were **already archived at the time** | Not a backup. Media, oversized binaries, sensitive paths, `.gitignore`-excluded build output, and anything **before the first archive** were never in git and cannot be conjured back |
-
-Two boundaries follow, and both are reported explicitly rather than silently skipped:
-
-- **No scan ran that day** → there is no snapshot for it; `restore` falls back to the **most recent earlier commit** and prints that commit's real timestamp, never pretending it was that day
-- **A project was first archived after the target date** → it is listed under "cannot restore" with the reason: `no archive before that date (first archived 2026-11-16)`
-
-### It never overwrites the archive
-
-The classic way to get "go back to a day" wrong is to overwrite the current archive in place, so this is
-a hard constraint: `restore` only **reads** the archive repos (`git archive`, never touching the working
-tree or the index) and writes into a fresh directory.
-
-| Flag | Behaviour |
-|---|---|
-| default (no `--write`) | Preview only: which commit each project resolves to, file count, size — **zero writes** |
-| `--write` | Expand into `<target>/_restore/<date>/<project>/`; the archive is byte-for-byte unchanged |
-| `--out DIR` | Write the copy somewhere else |
-| `--only KEYWORD` | Restore only matching projects |
-| `--force` | Overwrite an existing copy for the same day; confirm a total above 800 MB |
-| `--json` | Machine-readable (`commit` / `snapshot_at` / `files` / `bytes` per project) |
-
-Each expanded copy carries `_restore.md` + `_restore.json` recording **which commit** every project came
-from, so the result can be audited later. The copy has no `.git` — open it or build it directly.
-
-> Need to rewind **one** project in place? You don't need this command: the archive directory is already
-> a repo — `cd` into the project, pick a commit in `git log` and `git checkout <sha> -- .`.
-> `restore` is for the other job: getting a copy you can open and build without touching today's archive.
 
 ---
 
@@ -641,88 +555,9 @@ Someone pushed elsewhere and you are behind. This is the one case it refuses to 
 
 ---
 
-## 🔁 Backing up to your own repos: `sync`
+## 💝 Support this project
 
-Commits stay **on this machine only**. If the disk dies, the ledger dies with the source. `sync` closes that gap:
-it pushes to remotes **you configured yourself**.
-
-```bash
-python .../archiver.py sync              # inspect: which repos have a remote, pending changes, unpushed commits
-python .../archiver.py sync --push       # commit pending changes, then push
-python .../archiver.py sync --only KEYWORD  # limit to matching repos
-python .../archiver.py sync --json       # machine-readable, for scheduled scripts
-```
-
-Three constraints (better to do less than to overstep):
-
-| Constraint | Why |
-|---|---|
-| Only repos **with a remote** are pushed | The archiver does not decide where your backup lives, and never guesses a URL. No remote = skip, with instructions — it will not create one for you |
-| **Never force** | If the remote has commits you lack, it reports and stops. The archive holds source code; one force push can erase someone else's work |
-| No invented messages | A manual sync has no new prompts to draw from, so it says `sync: 手动同步（N 项变化）` |
-
-**Why `run` doesn't push**: the nightly job should not depend on the network. A dropped connection or expired
-credential would turn a successful archive run into a failing scheduled task.
-
-Set a remote once per repo; `sync --push` picks it up from then on:
-
-```bash
-cd <archive>/<some project>
-git remote add origin <your-remote-url>
-```
-
-The first push uses `git push -u`, so the upstream branch is created for you.
-
----
-
-## 📤 Handing a project over
-
-Every project in the archive is an **independent git repository** — just zip it or push it:
-
-```bash
-cd <archive>/2026-03-15_批量重命名工具
-git remote add origin <your-remote-url>
-git push -u origin master
-```
-
-Whoever clones it can pick up where you left off using the "Implementation" section of `README.md` and the integrity report in `_meta/integrity.md`.
-
----
-
-## 📁 Repository layout
-
-```text
-dev-project-archivist/
-├── SKILL.md                        # Skill entry: trigger conditions and execution rules
-├── README.md  README.en.md         # Chinese / English docs
-├── CHANGELOG.md                    # Release history and versioning rule
-├── pyproject.toml                  # Installable via pipx / uvx (still zero dependencies)
-├── .github/workflows/ci.yml        # 2 OS x 3 Python versions, full unittest discover
-├── scripts/
-│   ├── archiver.py                 # Core: archive / log / find / stats / report / restore
-│   ├── adapters/
-│   │   ├── base.py                 # Neutral event contract, Adapter base, multi-source index
-│   │   ├── workbuddy.py            # WorkBuddy session index and parser
-│   │   ├── claude_code.py          # Claude Code JSONL parser
-│   │   └── __init__.py             # Registry and --source selection
-│   └── tests/                      # 228 tests, all runnable offline
-│       ├── test_adapters.py        # Adapter unit tests
-│       ├── test_daylog.py          # Per-day aggregation (nothing lost or double counted)
-│       ├── test_naming.py          # Name evidence chain and title cleanup
-│       ├── test_find.py            # Search scoring and per-kind saturation
-│       ├── test_commit_msg.py      # Commit message generation
-│       ├── test_stats.py           # Cross-day ledger, same numbers as daylog
-│       ├── test_report.py          # HTML report structure and redaction
-│       ├── test_restore.py         # Restore semantics (throwaway git repos)
-│       ├── test_sync.py            # Push safety: never force, no remote = untouched
-│       ├── test_release.py         # Version triple, and README samples vs code
-│       └── test_public_content.py  # Leak guard: competitor name / home paths with a username
-├── references/
-│   ├── automation-prompt.md        # Copy-pasteable prompt for the nightly job
-│   └── data-sources.md             # Local data source structures (troubleshooting)
-├── docs/                           # Process notes: assessment / plan / change log
-└── LICENSE                         # MIT
-```
+If this tool helped you recover source you thought was gone, a star is appreciated — as is sharing it with someone who keeps losing track of work done in chat. Issues and adapter PRs are the most useful support of all.
 
 ---
 
@@ -748,9 +583,15 @@ completed milestone, and `pyproject.toml` / `__version__` / the top CHANGELOG en
 
 ---
 
+## 🔧 Development notes
+
+Architecture, design constraints, per-command internals and the repository layout: [DEVELOPMENT.en.md](DEVELOPMENT.en.md).
+
+---
+
 ## 📄 License
 
-[MIT](LICENSE)
+[AGPL-3.0](LICENSE) (GNU Affero General Public License v3)
 
 ---
 
