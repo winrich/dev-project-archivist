@@ -565,7 +565,7 @@ python scripts/archiver.py manage --target "<归档目录>" --port 8765
 提交前请跑一遍：
 
 ```bash
-python -m unittest discover -s scripts/tests   # 全量，228 例，离线可跑
+python -m unittest discover -s scripts/tests   # 全量，离线可跑
 python scripts/archiver.py scan --dry-run
 ```
 

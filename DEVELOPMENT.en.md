@@ -211,7 +211,7 @@ dev-project-archivist/
 │   │   ├── workbuddy.py            # WorkBuddy session index and parser
 │   │   ├── claude_code.py          # Claude Code JSONL parser
 │   │   └── __init__.py             # Registry and --source selection
-│   └── tests/                      # 228 tests, all runnable offline
+│   └── tests/                      # all runnable offline
 │       ├── test_adapters.py        # Adapter unit tests
 │       ├── test_daylog.py          # Per-day aggregation (nothing lost or double counted)
 │       ├── test_naming.py          # Name evidence chain and title cleanup

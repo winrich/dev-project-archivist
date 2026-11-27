@@ -573,7 +573,7 @@ Issues and PRs are welcome. Especially useful:
 Before submitting, please run:
 
 ```bash
-python -m unittest discover -s scripts/tests   # full suite, 228 tests, offline
+python -m unittest discover -s scripts/tests   # full suite, offline
 python scripts/archiver.py scan --dry-run
 ```
 

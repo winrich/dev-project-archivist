@@ -501,7 +501,7 @@ dev-project-archivist/
 │   │   ├── workbuddy.py            # WorkBuddy 会话索引与解析
 │   │   ├── claude_code.py          # Claude Code JSONL 解析
 │   │   └── __init__.py             # 注册表与 --source 选择
-│   └── tests/                      # 228 例，全部可离线跑
+│   └── tests/                      # 全部可离线跑
 │       ├── test_adapters.py        # 适配器单元测试
 │       ├── test_daylog.py          # 按天聚合（不丢不重）
 │       ├── test_naming.py          # 命名证据链与标题清洗
