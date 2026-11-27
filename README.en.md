@@ -559,9 +559,13 @@ Someone pushed elsewhere and you are behind. This is the one case it refuses to 
 
 If this tool helped you recover source you thought was gone, a star is appreciated — as is sharing it with someone who keeps losing track of work done in chat. Issues and adapter PRs are the most useful support of all.
 
+To swap tips or show what you recovered, visit [Discussions](https://github.com/winrich/dev-project-archivist/discussions); please read the [welcome post](docs/community/welcome.en.md) before posting.
+
 ---
 
 ## 🤝 Contributing
+
+Full guidelines: [CONTRIBUTING.en.md](CONTRIBUTING.en.md). For security issues, see [SECURITY.en.md](SECURITY.en.md).
 
 Issues and PRs are welcome. Especially useful:
 

@@ -21,6 +21,14 @@
 | [sample/report-demo.html](sample/report-demo.html) | 生成结果：一份 30 天的账本页，双击可看。README 里那张图的来源。 |
 | [img/report-demo.png](img/report-demo.png) | 上面那份 HTML 的截图，嵌在 README 首屏。 |
 
+## 三、社区资产
+
+| 文件 | 是什么 |
+|---|---|
+| [community/welcome.zh.md](community/welcome.zh.md) / [welcome.en.md](community/welcome.en.md) | Discussions 欢迎帖草稿，供维护者复制发布；含发帖前须知与欢迎的帖子类型 |
+| [CONTRIBUTING.md](../CONTRIBUTING.md) / [CONTRIBUTING.en.md](../CONTRIBUTING.en.md) | 贡献规范：三类高价值贡献、本地环境、提交前检查、公开内容红线、PR 规范 |
+| [SECURITY.md](../SECURITY.md) / [SECURITY.en.md](../SECURITY.en.md) | 安全策略：支持版本、私有报告入口、工具明确不做的事、使用者自查项 |
+
 **为什么要有样例**：README 需要一张「这东西长什么样」的图，但真实归档里是使用者自己的项目名、
 真实用量和真实时间分布，不能拿来当素材。所以数据全编，渲染走真函数。
 

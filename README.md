@@ -551,9 +551,13 @@ python scripts/archiver.py manage --target "<归档目录>" --port 8765
 
 如果它帮你找回过以为已经丢掉的源码，欢迎点一个 Star，或把它转给同样被「对话里做过、却找不到工程」困扰的朋友。Issue 里的问题、PR 里的新适配器，都是最直接的支持。
 
+想交流使用心得或展示成果，可以到 [Discussions](https://github.com/winrich/dev-project-archivist/discussions)；发帖前请先读一下[欢迎帖](docs/community/welcome.zh.md)。
+
 ---
 
 ## 🤝 贡献
+
+完整规范见 [CONTRIBUTING.md](CONTRIBUTING.md)，安全相关问题见 [SECURITY.md](SECURITY.md)。
 
 欢迎 Issue 和 PR，尤其欢迎这几类：
 
