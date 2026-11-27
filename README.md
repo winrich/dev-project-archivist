@@ -1,6 +1,6 @@
 # 🗂️ 对话项目归档器 · 把 AI 对话里的软件收拢成可继续开发的源码档案
 
-[中文](README.md) · [English](README.en.md)
+[中文](https://github.com/winrich/dev-project-archivist/blob/main/README.md) · [English](https://github.com/winrich/dev-project-archivist/blob/main/README.en.md)
 
 **读本机会话 → 识别项目 → 归档纯源码 → 一键跳回原对话。**
 
@@ -275,7 +275,7 @@ python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py sync --push
 先看产物，再决定要不要往下读。`report` 生成的账本页长这样：
 
 <p align="center">
-  <img src="docs/img/report-demo.png" alt="report 生成的单文件 HTML：四张总览卡、日历热力图、每日对话量、按对话量排序的项目卡" width="820">
+  <img src="https://raw.githubusercontent.com/winrich/dev-project-archivist/main/docs/img/report-demo.png" alt="report 生成的单文件 HTML：四张总览卡、日历热力图、每日对话量、按对话量排序的项目卡" width="820">
 </p>
 
 一份自包含的 HTML：双击就开，不发网络请求、不加载字体，能直接发给别人。四张总览卡（对话 / 项目 / 改动文件 / token）、日历热力图、每日对话量柱状图、按对话量排的项目卡。
@@ -291,11 +291,11 @@ python ~/.workbuddy/skills/dev-project-archivist/scripts/archiver.py sync --push
 如果你更愿意**在浏览器里管**，还有一套只监听本机的后台管理台。项目列表、活跃度、数据概览长这样：
 
 <p align="center">
-  <img src="docs/img/manage-demo.png" alt="管理台项目管理：左侧树形菜单、类型/语言/日期筛选、活跃度分数与近14天迷你图、置顶/外链/取消关注标记、分页">
+  <img src="https://raw.githubusercontent.com/winrich/dev-project-archivist/main/docs/img/manage-demo.png" alt="管理台项目管理：左侧树形菜单、类型/语言/日期筛选、活跃度分数与近14天迷你图、置顶/外链/取消关注标记、分页">
 </p>
 
 <p align="center">
-  <img src="docs/img/manage-demo-overview.png" alt="管理台数据概览：六张统计卡、近14天活动量、按类型/活跃等级/语言分布、最近更新项目">
+  <img src="https://raw.githubusercontent.com/winrich/dev-project-archivist/main/docs/img/manage-demo-overview.png" alt="管理台数据概览：六张统计卡、近14天活动量、按类型/活跃等级/语言分布、最近更新项目">
 </p>
 
 左侧树形菜单分四组（总览 / 管理 / 分析 / 系统）：数据概览、项目管理、活跃度排行、按日期报告、设置。列表支持类型 / 语言 / 日期筛选与分页，每行带一个 0–100 的活跃度分数和 14 天迷你图；置顶、外链、取消关注都有标记。功能细节见下面「🛠️ 管理台」。

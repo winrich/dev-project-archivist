@@ -1,6 +1,6 @@
 # 🗂️ Conversation Project Archivist · Turn AI chat software into a source archive you can keep building
 
-[English](README.en.md) · [简体中文](README.md)
+[English](https://github.com/winrich/dev-project-archivist/blob/main/README.en.md) · [简体中文](https://github.com/winrich/dev-project-archivist/blob/main/README.md)
 
 **Read local sessions → identify projects → archive clean source → jump back to the conversation.**
 
@@ -287,7 +287,7 @@ forces**, and is not part of `run` (a scheduled task should not depend on the ne
 Look at the output first, decide later whether to read on. This is what the page `report` generates looks like:
 
 <p align="center">
-  <img src="docs/img/report-demo.png" alt="Single-file HTML report: four summary cards, calendar heatmap, daily bar chart, projects ranked by prompt count" width="820">
+  <img src="https://raw.githubusercontent.com/winrich/dev-project-archivist/main/docs/img/report-demo.png" alt="Single-file HTML report: four summary cards, calendar heatmap, daily bar chart, projects ranked by prompt count" width="820">
 </p>
 
 One self-contained HTML file: double-click and it opens — no network requests, no web fonts, safe to hand to someone else. Four summary cards (prompts / projects / changed files / tokens), a calendar heatmap, a daily bar chart, and projects ranked by prompt count.
@@ -305,11 +305,11 @@ Terminal output for every command — classification table, search hits, ledger 
 If you would rather manage things in a browser, there is also a console that listens on localhost only. The project list and overview look like this:
 
 <p align="center">
-  <img src="docs/img/manage-demo.png" alt="Console project list: tree menu, type/language/date filters, activity score and 14-day sparkline, pinned/external/unwatched markers, pagination">
+  <img src="https://raw.githubusercontent.com/winrich/dev-project-archivist/main/docs/img/manage-demo.png" alt="Console project list: tree menu, type/language/date filters, activity score and 14-day sparkline, pinned/external/unwatched markers, pagination">
 </p>
 
 <p align="center">
-  <img src="docs/img/manage-demo-overview.png" alt="Console overview: six stat cards, 14-day activity, type/tier/language breakdowns, recently updated projects">
+  <img src="https://raw.githubusercontent.com/winrich/dev-project-archivist/main/docs/img/manage-demo-overview.png" alt="Console overview: six stat cards, 14-day activity, type/tier/language breakdowns, recently updated projects">
 </p>
 
 The tree menu has four groups (Overview / Manage / Analyse / System): overview, projects, activity ranking, date-based reports, and settings. See "🛠️ Management console" below for details.
