@@ -141,12 +141,15 @@ class TestCommitAt(RestoreBase):
                          "2026-11-10")
 
     def test_boundary_uses_local_day_not_utc(self):
-        """00:30 +0800 的提交在 UTC 是前一天 16:30。
+        """本地 00:30 的提交不能被前一天的边界捞走。
 
-        按 UTC 日期比较会把 11-14 凌晨的提交判到 11-13，用户回到 11-14 就看不到它。
+        提交日期用运行机器的本地时区偏移构造：CI 在 UTC、开发机可能在 UTC+8，
+        写死 +0800 会让 UTC 环境下这条提交落到 11-13，边界断言反向失败。
+        按 UTC 日期比较会把凌晨提交判到前一天，用户回到当天就看不到它。
         """
+        offset = datetime(2026, 11, 14, 0, 30).astimezone().strftime("%z")
         adir = make_repo(self.root, "ProjC", [
-            ("2026-11-14T00:30:00+0800", {"late.txt": "x\n"}, "init: 归档 ProjC"),
+            (f"2026-11-14T00:30:00{offset}", {"late.txt": "x\n"}, "init: 归档 ProjC"),
         ])
         c = git_commit_at(adir, end_of_day("2026-11-14"))
         self.assertTrue(c["sha"], "本地时间 11-14 的提交必须能恢复")
